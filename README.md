@@ -21,6 +21,11 @@ Write once, publish everywhere. Schedule posts to X, Bluesky, LinkedIn, Facebook
 
 </div>
 
+> This repository is the Apache-2.0-licensed iot.EraX downstream distribution
+> of [coollabsio/shoutrrr](https://github.com/coollabsio/shoutrrr). It preserves
+> upstream attribution while providing the minimal, vulnerability-gated runtime
+> used by `iot.EraX Shout`.
+
 ## What is Shoutrrr?
 
 Shoutrrr is a social media scheduling tool you run yourself. Connect your accounts, draft a post once, and send it to every network at the same time — or queue it to go out on a recurring schedule. No monthly seat fees, no third party holding your tokens or your data.
@@ -60,101 +65,80 @@ It's built for individuals and teams: invite collaborators into a shared workspa
 
 ## Self-hosting
 
-The recommended way to host Shoutrrr is the prebuilt Docker image:
+The public iot.EraX image is published to Docker Hub with immutable downstream
+version tags. It contains PHP 8.5, FrankenPHP, ffmpeg, production Composer
+dependencies, and compiled browser assets. Bun, Node.js, Yarn, npm, Composer,
+Git, SSR assets, development dependencies, and `node_modules` are absent from
+the final runtime.
+
+Each release is built for `linux/amd64` and `linux/arm64`, scanned for operating
+system and language vulnerabilities before and after mirroring, signed with
+keyless Cosign, and accompanied by provenance and CycloneDX SBOM attestations.
+No mutable `latest` tag is published.
+
+Pull a published immutable version:
 
 ```bash
-docker pull ghcr.io/coollabsio/shoutrrr:latest
-```
-
-The image runs the web app, queue worker, and scheduler in one container — ideal for a single box. It defaults to SQLite with no external services, and you can switch to Postgres/Redis later if you need to scale out.
-
-### Quick start with `docker run`
-
-Create a production env file:
-
-```bash
-cat > .env.prod <<'EOF'
-APP_URL=http://localhost:8080
-APP_KEY=base64:PASTE_GENERATED_KEY_HERE
-EOF
-```
-
-Generate an `APP_KEY` and paste it into `.env.prod`:
-
-```bash
-docker run --rm --entrypoint php ghcr.io/coollabsio/shoutrrr:latest /var/www/html/artisan key:generate --show
-```
-
-Start Shoutrrr with persistent volumes:
-
-```bash
-docker volume create shoutrrr-storage
-docker volume create shoutrrr-sqlite
-
-docker run -d \
-  --name shoutrrr \
-  --env-file .env.prod \
-  -p 8080:8080 \
-  -v shoutrrr-storage:/var/www/html/storage \
-  -v shoutrrr-sqlite:/var/www/html/database/sqlite \
-  ghcr.io/coollabsio/shoutrrr:latest
-```
-
-Shoutrrr runs its startup tasks automatically, including database migrations. Open `http://localhost:8080`, register the first account, and you're in. The image defaults to production mode, SQLite, database-backed cache/queue/session storage, one in-container queue worker, one scheduler, and SSR disabled.
-
-The image accepts videos up to Shoutrrr's 1 GiB application ceiling by default. Local-disk uploads stream the request body straight to storage and the app bounds how many bytes it writes, so memory and disk usage stay flat no matter the video size. If you place it behind a reverse proxy, set that proxy's request-body limit to at least 1.1 GiB too, and keep `PHP_POST_MAX_SIZE` above the ceiling so a legitimate large upload isn't rejected up front. For large or production deployments, configure S3-compatible object storage (`FILESYSTEM_DISK=s3`): uploads then go directly to storage and never pass through the app at all.
-
-For a real public deployment, set `APP_URL` to your HTTPS domain and set `SESSION_SECURE_COOKIE=true`. To test a specific release candidate, replace `latest` with a version tag such as `1.0.0-rc.2` in the commands above.
-
-To reset all local test data:
-
-```bash
-docker rm -f shoutrrr
-docker volume rm shoutrrr-storage shoutrrr-sqlite
+docker pull ioterax/shoutrrr:<version>
 ```
 
 ### Docker Compose
 
-If you prefer Compose, use the bundled production file. It pulls the prebuilt image from GHCR (`ghcr.io/coollabsio/shoutrrr:latest`):
+The bundled self-hosting stack uses a digest-pinned PostgreSQL 18 base and runs
+migration, web, queue, and scheduler as separate containers. Its small local
+database companion removes the unused vulnerable `gosu` binary and is scanned
+by the same container gate. Copy the example environment, replace `<version>`
+with a published tag, generate an application key, and set a strong database
+password:
 
 ```bash
-git clone https://github.com/coollabsio/shoutrrr.git
+git clone https://github.com/ioterax/shoutrrr.git
 cd shoutrrr
 cp .env.example.prod .env
 
-# Set APP_KEY and APP_URL in .env before starting.
-docker compose -f docker-compose.production.yaml run --rm app php artisan key:generate --show
+# Set SHOUTRRR_VERSION and POSTGRES_PASSWORD in .env first.
+docker run --rm ioterax/shoutrrr:<version> php artisan key:generate --show
+# Copy the generated key into APP_KEY in .env.
 
-docker compose -f docker-compose.production.yaml up -d
+docker compose -f docker-compose.production.yaml up -d --build
 ```
 
-Shoutrrr runs its startup tasks automatically, including database migrations. `docker-compose.development.yaml` builds the image locally from source instead.
+Open `http://localhost:8080` and create the first account. For a public HTTPS
+deployment, set the final `APP_URL`, `OCTANE_HTTPS=true`,
+`SESSION_SECURE_COOKIE=true`, and a precise trusted-proxy range. Use `*` only
+when the application cannot be reached except through that proxy.
 
-Set `INERTIA_SSR_ENABLED=true` for server-side rendering. To run the worker/scheduler as separate services in the cloud, set `QUEUE_WORKER_ENABLED=false` / `SCHEDULER_ENABLED=false` and override the container command (e.g. `php artisan queue:work`).
+The application image itself does not run migrations or background processes
+implicitly. Compose expresses their lifecycle explicitly, making the same image
+suitable for orchestrators that separate web services from batch Jobs.
 
-### Deploy with Coolify
+> `docker-compose.production.yaml` is a public self-hosting reference. The
+> official iot.EraX deployment does not use its PostgreSQL container: Cloud Run
+> connects privately to the existing Hub/Foundation PostgreSQL 16 instance and
+> runs migrations, scheduler dispatch, and queue draining as terminating Cloud
+> Run Jobs. See [the production delivery contract](docs/ioterax-production.md).
 
-[Coolify](https://coolify.io) deploys Shoutrrr straight from this repo using the bundled Compose file — it handles the domain, HTTPS, and persistent volumes for you.
+### Local runtime preview
 
-> An official Shoutrrr app is coming to the Coolify app directory soon for one-click deploys. Until then, use the manual from-source method below.
+`docker-compose.development.yaml` builds exactly the minimal production runtime
+from the current checkout. It includes an isolated PostgreSQL container and can
+optionally load the upstream demo account:
 
-1. In Coolify, click **+ New → Resource** and pick **Public Repository** (or Private, via the GitHub App). Enter `https://github.com/coollabsio/shoutrrr`.
-2. Set the **Build Pack** to **Docker Compose** and the **Docker Compose file** to `docker-compose.production.yaml`.
-3. Under the `app` service, add a **Domain** pointing at port **8080**. Coolify provisions the TLS certificate automatically.
-4. Add these **Environment Variables**:
+```bash
+cp .env.example.prod .env
+# Set APP_KEY and POSTGRES_PASSWORD in .env.
+docker compose -f docker-compose.development.yaml --profile demo up -d --build
+```
 
-    | Variable    | Value                                                                        |
-    | ----------- | ---------------------------------------------------------------------------- |
-    | `APP_KEY`   | a Laravel key — generate one with `php artisan key:generate --show`          |
-    | `APP_URL`   | your domain, e.g. `https://social.example.com` (must match the domain above) |
-    | `APP_ENV`   | `production`                                                                 |
-    | `APP_DEBUG` | `false`                                                                      |
+The demo credentials are `test@example.com` / `password`. Omit
+`--profile demo` when you do not want seeded data.
 
-    Add your `X_*`, `LINKEDIN_*`, `FACEBOOK_*`, `THREADS_*`, and optional `GOOGLE_*` credentials here too (see [Connecting your accounts](#connecting-your-accounts)).
+The source-development workflow remains Bun-based, as defined by upstream. Bun
+is a build dependency only and does not enter either runtime image.
 
-5. Click **Deploy**.
-
-The Compose file declares named volumes for `storage` and the SQLite database, so your data and uploads survive redeploys. To run against managed Postgres/Redis instead, point the `DB_*` / `REDIS_*` env vars at them and switch `DB_CONNECTION`, `CACHE_STORE`, and `QUEUE_CONNECTION` accordingly.
+The image accepts videos up to Shoutrrr's 1 GiB application ceiling by default.
+For large or public deployments, configure appropriate proxy limits and prefer
+object storage so uploads do not traverse the application process.
 
 ### Security headers & Content-Security-Policy
 
