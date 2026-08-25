@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1.20
+
+ARG POSTGRES_IMAGE=postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+
+# The official entrypoint only needs gosu when it starts as root. Compose runs
+# this local/self-hosting database directly as the image's postgres user, so the
+# vulnerable build-time gosu binary can be removed completely.
+FROM ${POSTGRES_IMAGE}
+
+USER root
+RUN rm -f /usr/local/bin/gosu \
+    && test ! -e /usr/local/bin/gosu
+
+USER postgres
