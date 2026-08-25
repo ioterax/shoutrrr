@@ -1,10 +1,10 @@
 name: shoutrrr
 
-# Public self-hosting topology. Every application process uses the same
+# Self-hosting topology. Every application process uses the same
 # immutable iot.EraX image; build tools and node_modules are not present.
 x-app-image: &app-image
-    image: "ioterax/shoutrrr:${SHOUTRRR_VERSION:?Set SHOUTRRR_VERSION to an immutable release}"
-    pull_policy: always
+    image: "${SHOUTRRR_IMAGE:?Set SHOUTRRR_IMAGE to an explicit immutable image reference}"
+    pull_policy: "${SHOUTRRR_PULL_POLICY:-always}"
     init: true
     env_file:
         - path: .env

@@ -154,6 +154,7 @@ return [
         ],
 
         'default' => [
+            'scheme' => env('REDIS_SCHEME', 'tcp'),
             'url' => env('REDIS_URL'),
             'host' => env('REDIS_HOST', '127.0.0.1'),
             'username' => env('REDIS_USERNAME'),
@@ -164,9 +165,17 @@ return [
             'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
             'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+            'context' => [
+                'stream' => array_filter([
+                    'cafile' => env('REDIS_TLS_CA_PATH'),
+                    'verify_peer' => env('REDIS_TLS_VERIFY_PEER', true),
+                    'verify_peer_name' => env('REDIS_TLS_VERIFY_PEER_NAME', true),
+                ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+            ],
         ],
 
         'cache' => [
+            'scheme' => env('REDIS_SCHEME', 'tcp'),
             'url' => env('REDIS_URL'),
             'host' => env('REDIS_HOST', '127.0.0.1'),
             'username' => env('REDIS_USERNAME'),
@@ -177,6 +186,13 @@ return [
             'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
             'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+            'context' => [
+                'stream' => array_filter([
+                    'cafile' => env('REDIS_TLS_CA_PATH'),
+                    'verify_peer' => env('REDIS_TLS_VERIFY_PEER', true),
+                    'verify_peer_name' => env('REDIS_TLS_VERIFY_PEER_NAME', true),
+                ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+            ],
         ],
 
     ],

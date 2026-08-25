@@ -65,21 +65,26 @@ It's built for individuals and teams: invite collaborators into a shared workspa
 
 ## Self-hosting
 
-The public iot.EraX image is published to Docker Hub with immutable downstream
-version tags. It contains PHP 8.5, FrankenPHP, ffmpeg, production Composer
-dependencies, and compiled browser assets. Bun, Node.js, Yarn, npm, Composer,
-Git, SSR assets, development dependencies, and `node_modules` are absent from
-the final runtime.
+The hardened iot.EraX production image is private in Google Artifact Registry;
+public image distribution is deferred. It contains PHP 8.5, FrankenPHP,
+ffmpeg, production Composer dependencies, and compiled browser assets. Bun,
+Node.js, Yarn, npm, Composer, Git, SSR assets, development dependencies, and
+`node_modules` are absent from the final runtime.
 
 Each release is built for `linux/amd64` and `linux/arm64`, scanned for operating
-system and language vulnerabilities before and after mirroring, signed with
+system and language vulnerabilities before and after publication, signed with
 keyless Cosign, and accompanied by provenance and CycloneDX SBOM attestations.
 No mutable `latest` tag is published.
 
-Pull a published immutable version:
+Self-hosters choose an explicit immutable image reference. It may be an image
+built locally from this checkout or a digest in a registry they control. The
+Compose contract does not assume Docker Hub, GHCR, or access to the private
+iot.EraX registry.
+
+Build the runtime locally, for example:
 
 ```bash
-docker pull ioterax/shoutrrr:<version>
+docker build --tag shoutrrr-local:1.4.4-ioterax.1 .
 ```
 
 ### Docker Compose
@@ -87,17 +92,18 @@ docker pull ioterax/shoutrrr:<version>
 The bundled self-hosting stack uses a digest-pinned PostgreSQL 18 base and runs
 migration, web, queue, and scheduler as separate containers. Its small local
 database companion removes the unused vulnerable `gosu` binary and is scanned
-by the same container gate. Copy the example environment, replace `<version>`
-with a published tag, generate an application key, and set a strong database
-password:
+by the same container gate. Copy the example environment, set the explicit
+image reference and local pull policy, generate an application key, and set a
+strong database password:
 
 ```bash
 git clone https://github.com/ioterax/shoutrrr.git
 cd shoutrrr
 cp .env.example.prod .env
 
-# Set SHOUTRRR_VERSION and POSTGRES_PASSWORD in .env first.
-docker run --rm ioterax/shoutrrr:<version> php artisan key:generate --show
+# Set SHOUTRRR_IMAGE=shoutrrr-local:1.4.4-ioterax.1,
+# SHOUTRRR_PULL_POLICY=never, and POSTGRES_PASSWORD in .env first.
+docker run --rm shoutrrr-local:1.4.4-ioterax.1 php artisan key:generate --show
 # Copy the generated key into APP_KEY in .env.
 
 docker compose -f docker-compose.production.yaml up -d --build
