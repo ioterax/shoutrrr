@@ -144,7 +144,7 @@ jobs:
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               -v "$RUNNER_TEMP/deploy-evidence:/evidence" \
               "$TRIVY_IMAGE" image \
-              --image-platform "linux/$arch" \
+              --platform "linux/$arch" \
               --scanners vuln \
               --pkg-types os,library \
               --severity HIGH,CRITICAL \
