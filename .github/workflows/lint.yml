@@ -3,7 +3,6 @@ name: linter
 on:
   push:
     branches:
-      - develop
       - master
   pull_request:
     branches:
@@ -12,6 +11,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
