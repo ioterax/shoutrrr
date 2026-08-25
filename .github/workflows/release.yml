@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
   id-token: write
   attestations: write
 
@@ -19,9 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CANDIDATE_IMAGE: ghcr.io/ioterax/shoutrrr-candidate
+  CANDIDATE_IMAGE: europe-west1-docker.pkg.dev/ioterax-prd/ioterax-images/shoutrrr-candidate
   GAR_IMAGE: europe-west1-docker.pkg.dev/ioterax-prd/ioterax-images/shoutrrr
-  DOCKERHUB_IMAGE: docker.io/ioterax/shoutrrr
   TRIVY_IMAGE: aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 # 0.74.0
   SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:17da3ac5cadf2b27a3dcf7dea857c4cea558ef757641725fc0eec560030057b3 # 1.22.2
   WIF_PROVIDER: projects/913330680454/locations/global/workloadIdentityPools/github-actions-pool/providers/shoutrrr
@@ -40,24 +38,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate source, version, and Docker Hub repository
+      - name: Validate source and version
         id: release
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "ioterax/shoutrrr"
           test "$GITHUB_REF" = "refs/heads/master"
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ioterax\.[1-9][0-9]*$ ]]
-          test -n "$DOCKERHUB_USERNAME"
-          test -n "$DOCKERHUB_TOKEN"
-
-          curl --fail --silent --show-error \
-            https://hub.docker.com/v2/repositories/ioterax/shoutrrr \
-            | jq -e '.is_private == false' >/dev/null
 
           created="$(git show -s --format=%cI "$GITHUB_SHA")"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -86,12 +76,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Log in to the candidate registry
-        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
 
       - name: Build and push candidate by digest
         id: build
@@ -143,12 +138,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Log in to the candidate registry
-        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
 
       - name: Create immutable multi-platform candidate
         id: manifest
@@ -188,13 +188,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Log in to the candidate registry
-        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -206,13 +199,6 @@ jobs:
 
       - name: Configure Artifact Registry authentication
         run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
@@ -267,7 +253,7 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          for target in "$GAR_IMAGE:$VERSION" "$DOCKERHUB_IMAGE:$VERSION"; do
+          for target in "$GAR_IMAGE:$VERSION"; do
             if docker run --rm \
               -v "$HOME/.docker:/root/.docker:ro" \
               "$SKOPEO_IMAGE" inspect "docker://$target" >/dev/null 2>&1; then
@@ -337,32 +323,7 @@ jobs:
             --predicate "$RUNNER_TEMP/evidence/sbom-arm64.cdx.json" \
             "$GAR_IMAGE@$DIGEST"
 
-      - name: Copy approved manifest to public Docker Hub
-        shell: bash
-        env:
-          DIGEST: ${{ needs.manifest.outputs.digest }}
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -v "$HOME/.docker:/root/.docker:ro" \
-            "$SKOPEO_IMAGE" copy --all --preserve-digests \
-            "docker://$GAR_IMAGE@$DIGEST" \
-            "docker://$DOCKERHUB_IMAGE:$VERSION"
-
-          copied_digest="$(docker run --rm \
-            -v "$HOME/.docker:/root/.docker:ro" \
-            "$SKOPEO_IMAGE" inspect --format '{{.Digest}}' "docker://$DOCKERHUB_IMAGE:$VERSION")"
-          test "$copied_digest" = "$DIGEST"
-
-      - name: Attest Docker Hub provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-name: ${{ env.DOCKERHUB_IMAGE }}
-          subject-digest: ${{ needs.manifest.outputs.digest }}
-          push-to-registry: true
-
-      - name: Sign, attest, and verify published digests
+      - name: Verify published digest
         shell: bash
         env:
           DIGEST: ${{ needs.manifest.outputs.digest }}
@@ -372,31 +333,20 @@ jobs:
           identity='^https://github.com/ioterax/shoutrrr/.github/workflows/release\.yml@refs/heads/master$'
           issuer='https://token.actions.githubusercontent.com'
 
-          cosign sign --yes "$DOCKERHUB_IMAGE@$DIGEST"
-          cosign attest --yes --type cyclonedx \
-            --predicate "$RUNNER_TEMP/evidence/sbom-amd64.cdx.json" \
-            "$DOCKERHUB_IMAGE@$DIGEST"
-          cosign attest --yes --type cyclonedx \
-            --predicate "$RUNNER_TEMP/evidence/sbom-arm64.cdx.json" \
-            "$DOCKERHUB_IMAGE@$DIGEST"
-
-          for target in "$GAR_IMAGE@$DIGEST" "$DOCKERHUB_IMAGE@$DIGEST"; do
-            cosign verify \
-              --certificate-identity-regexp "$identity" \
-              --certificate-oidc-issuer "$issuer" \
-              "$target" >/dev/null
-            cosign verify-attestation \
-              --type cyclonedx \
-              --certificate-identity-regexp "$identity" \
-              --certificate-oidc-issuer "$issuer" \
-              "$target" >/dev/null
-          done
+          cosign verify \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$GAR_IMAGE@$DIGEST" >/dev/null
+          cosign verify-attestation \
+            --type cyclonedx \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$GAR_IMAGE@$DIGEST" >/dev/null
 
           {
             echo "version=$VERSION"
             echo "digest=$DIGEST"
             echo "artifact_registry=$GAR_IMAGE@$DIGEST"
-            echo "docker_hub=$DOCKERHUB_IMAGE@$DIGEST"
             echo "commit=$GITHUB_SHA"
           } > "$RUNNER_TEMP/evidence/release.txt"
 

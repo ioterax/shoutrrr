@@ -5,6 +5,7 @@ use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceMembership;
 use Database\Seeders\DatabaseSeeder;
+use Database\Seeders\DefaultUserSeeder;
 
 it('seeds the default user with a current workspace in development', function (): void {
     $this->app->detectEnvironment(fn () => 'local');
@@ -52,4 +53,11 @@ it('does not seed the default user outside development', function (): void {
 
     expect(User::query()->where('email', 'test@example.com')->exists())->toBeFalse()
         ->and(User::query()->where('email', 'test2@example.com')->exists())->toBeFalse();
+});
+
+it('rejects direct default-user seeding outside development', function (): void {
+    $this->app->detectEnvironment(fn () => 'production');
+
+    expect(fn () => app(DefaultUserSeeder::class)->run())
+        ->toThrow(LogicException::class, 'The default development users may be seeded only in the local environment.');
 });

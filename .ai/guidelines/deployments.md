@@ -4,8 +4,9 @@ This project ships a single production Docker image built on
 [serversideup/php](https://serversideup.net/open-source/docker-php/) FrankenPHP images,
 running the web tier through **Laravel Octane (FrankenPHP worker mode)**. The image is built
 from one multi-stage `Dockerfile` (root) and run via two Compose files:
-`docker-compose.development.yaml` (builds locally from source) and
-`docker-compose.production.yaml` (pulls `ghcr.io/coollabsio/shoutrrr:latest`).
+`docker-compose.development.yaml` builds locally from source, while
+`docker-compose.production.yaml` requires an explicit immutable `SHOUTRRR_IMAGE`
+reference and does not assume a public registry.
 
 ## One image, supervised processes
 
@@ -42,7 +43,8 @@ them as **separate services that override the image CMD**, e.g.
 # Build locally from source
 APP_KEY="base64:..." docker compose -f docker-compose.development.yaml up -d --build
 
-# Or pull the published image (ghcr.io/coollabsio/shoutrrr:latest)
+# Or use an explicit immutable image reference for the production Compose file
+SHOUTRRR_IMAGE="registry.example/shoutrrr@sha256:..." \
 APP_KEY="base64:..." docker compose -f docker-compose.production.yaml up -d
 
 # Migrations auto-run on boot; to run them manually:
