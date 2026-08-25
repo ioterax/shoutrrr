@@ -3,6 +3,14 @@
 use Illuminate\Support\Str;
 use Pdo\Mysql;
 
+$redisTlsContext = [
+    'stream' => array_filter([
+        'cafile' => env('REDIS_TLS_CA_PATH'),
+        'verify_peer' => env('REDIS_TLS_VERIFY_PEER', true),
+        'verify_peer_name' => env('REDIS_TLS_VERIFY_PEER_NAME', true),
+    ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+];
+
 return [
 
     /*
@@ -165,13 +173,7 @@ return [
             'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
             'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
-            'context' => [
-                'stream' => array_filter([
-                    'cafile' => env('REDIS_TLS_CA_PATH'),
-                    'verify_peer' => env('REDIS_TLS_VERIFY_PEER', true),
-                    'verify_peer_name' => env('REDIS_TLS_VERIFY_PEER_NAME', true),
-                ], static fn (mixed $value): bool => $value !== null && $value !== ''),
-            ],
+            'context' => $redisTlsContext,
         ],
 
         'cache' => [
@@ -186,13 +188,7 @@ return [
             'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
             'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
-            'context' => [
-                'stream' => array_filter([
-                    'cafile' => env('REDIS_TLS_CA_PATH'),
-                    'verify_peer' => env('REDIS_TLS_VERIFY_PEER', true),
-                    'verify_peer_name' => env('REDIS_TLS_VERIFY_PEER_NAME', true),
-                ], static fn (mixed $value): bool => $value !== null && $value !== ''),
-            ],
+            'context' => $redisTlsContext,
         ],
 
     ],
