@@ -1,0 +1,152 @@
+name: container
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+    branches: [develop, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI_IMAGE: ioterax/shoutrrr:ci-${{ github.sha }}
+  DB_CI_IMAGE: ioterax/shoutrrr-postgres:ci-${{ github.sha }}
+  TRIVY_IMAGE: aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 # 0.74.0
+
+jobs:
+  runtime:
+    name: Minimal runtime and vulnerability gate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build the final runtime
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          platforms: linux/amd64
+          tags: ${{ env.CI_IMAGE }}
+          build-args: |
+            APP_VERSION=ci-${{ github.sha }}
+            BUILD_DATE=1970-01-01T00:00:00Z
+            VCS_REF=${{ github.event.pull_request.head.sha || github.sha }}
+          cache-from: type=gha,scope=runtime-amd64
+          cache-to: type=gha,scope=runtime-amd64,mode=max
+          provenance: false
+
+      - name: Build the Compose PostgreSQL companion
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile.postgres
+          load: true
+          platforms: linux/amd64
+          tags: ${{ env.DB_CI_IMAGE }}
+          cache-from: type=gha,scope=postgres-amd64
+          cache-to: type=gha,scope=postgres-amd64,mode=max
+          provenance: false
+
+      - name: Assert runtime contents and size
+        shell: bash
+        run: |
+          set -euo pipefail
+          size="$(docker image inspect --format '{{.Size}}' "$CI_IMAGE")"
+          test "$size" -le 629145600
+
+          docker run --rm --entrypoint sh "$CI_IMAGE" -ceu '
+            test "$(id -u)" = 82
+            php -r '\''exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 5 ? 0 : 1);'\''
+            php -r '\''exit(extension_loaded("pcntl") && defined("SIGINT") ? 0 : 1);'\''
+            test -L public/storage
+            test ! -e node_modules
+            ! command -v bun
+            ! command -v node
+            ! command -v npm
+            ! command -v yarn
+            ! command -v composer
+            ! command -v git
+          '
+
+          docker run --rm --entrypoint sh "$DB_CI_IMAGE" -ceu '
+            test "$(id -u)" = 70
+            test ! -e /usr/local/bin/gosu
+          '
+
+      - name: Scan the final runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trivy-cache" "$RUNNER_TEMP/evidence"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            "$TRIVY_IMAGE" image \
+            --scanners vuln \
+            --pkg-types os,library \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            "$CI_IMAGE"
+
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            -v "$RUNNER_TEMP/evidence:/evidence" \
+            "$TRIVY_IMAGE" image \
+            --scanners vuln \
+            --pkg-types os,library \
+            --format json \
+            --output /evidence/trivy.json \
+            "$CI_IMAGE"
+
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            -v "$RUNNER_TEMP/evidence:/evidence" \
+            "$TRIVY_IMAGE" image \
+            --format cyclonedx \
+            --output /evidence/sbom.cdx.json \
+            "$CI_IMAGE"
+
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            -v "$RUNNER_TEMP/evidence:/evidence" \
+            "$TRIVY_IMAGE" image \
+            --scanners vuln \
+            --pkg-types os,library \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --format json \
+            --output /evidence/trivy-postgres.json \
+            "$DB_CI_IMAGE"
+
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            -v "$RUNNER_TEMP/evidence:/evidence" \
+            "$TRIVY_IMAGE" image \
+            --format cyclonedx \
+            --output /evidence/sbom-postgres.cdx.json \
+            "$DB_CI_IMAGE"
+
+      - name: Upload security evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-security-${{ github.sha }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: warn
+          retention-days: 30

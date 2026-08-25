@@ -1,37 +1,82 @@
 name: release
 
-# Build the production image and push it to GHCR when a GitHub Release is
-# published. workflow_dispatch is kept for manually testing the pipeline (it
-# pushes a sha-tagged image instead of a versioned/latest one).
 on:
-  release:
-    types: [published]
   workflow_dispatch:
-
-# coollabsio/shoutrrr -> ghcr.io/coollabsio/shoutrrr
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
+    inputs:
+      version:
+        description: Immutable downstream version (for example 1.4.4-ioterax.1)
+        required: true
+        type: string
 
 permissions:
   contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: shoutrrr-release
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_IMAGE: ghcr.io/ioterax/shoutrrr-candidate
+  GAR_IMAGE: europe-west1-docker.pkg.dev/ioterax-prd/ioterax-images/shoutrrr
+  DOCKERHUB_IMAGE: docker.io/ioterax/shoutrrr
+  TRIVY_IMAGE: aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 # 0.74.0
+  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:17da3ac5cadf2b27a3dcf7dea857c4cea558ef757641725fc0eec560030057b3 # 1.22.2
+  WIF_PROVIDER: projects/913330680454/locations/global/workloadIdentityPools/github-actions-pool/providers/shoutrrr
+  WIF_SERVICE_ACCOUNT: github-shoutrrr-deployer@ioterax-prd.iam.gserviceaccount.com
 
 jobs:
+  validate:
+    name: Validate immutable release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      created: ${{ steps.release.outputs.created }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate source, version, and Docker Hub repository
+        id: release
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "ioterax/shoutrrr"
+          test "$GITHUB_REF" = "refs/heads/master"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ioterax\.[1-9][0-9]*$ ]]
+          test -n "$DOCKERHUB_USERNAME"
+          test -n "$DOCKERHUB_TOKEN"
+
+          curl --fail --silent --show-error \
+            https://hub.docker.com/v2/repositories/ioterax/shoutrrr \
+            | jq -e '.is_private == false' >/dev/null
+
+          created="$(git show -s --format=%cI "$GITHUB_SHA")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+
   build:
-    name: Build ${{ matrix.platform }} image
+    name: Build ${{ matrix.platform }}
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
             runner: ubuntu-24.04
-            cache: amd64
+            slug: amd64
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
-            cache: arm64
+            slug: arm64
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: write # push to GHCR
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,129 +86,325 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Log in to GHCR
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+      - name: Log in to the candidate registry
+        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract image metadata (tags + labels)
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          # Tag releases with their semver; only move :latest for stable releases.
-          # A manual dispatch gets a sha tag so the push doesn't fail without a tag.
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && github.event.release.prerelease == false }}
-            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
-          flavor: |
-            latest=false
-
-      - name: Build and push image by digest
+      - name: Build and push candidate by digest
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile
           platforms: ${{ matrix.platform }}
-          # Bake the running version into the image (frontend bundle + PHP env).
-          # A release supplies its published tag; a manual dispatch (no tag) falls
-          # back to the commit sha so the built image still self-reports a version.
           build-args: |
-            APP_VERSION=${{ github.event.release.tag_name || github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.cache }}
-          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.cache }},mode=max,image-manifest=true,oci-mediatypes=true
+            APP_VERSION=${{ needs.validate.outputs.version }}
+            BUILD_DATE=${{ needs.validate.outputs.created }}
+            VCS_REF=${{ github.sha }}
+          outputs: type=image,name=${{ env.CANDIDATE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=release-${{ matrix.slug }}
+          cache-to: type=gha,scope=release-${{ matrix.slug }},mode=max
           provenance: false
 
-      - name: Export image digest
-        run: |
-          mkdir -p /tmp/digests
-          touch "/tmp/digests/${BUILD_DIGEST#sha256:}"
+      - name: Export candidate digest
+        shell: bash
         env:
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${BUILD_DIGEST#sha256:}"
 
-      - name: Upload image digest
+      - name: Upload candidate digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: digest-${{ matrix.cache }}
-          path: /tmp/digests/*
+          name: digest-${{ matrix.slug }}
+          path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  image:
-    name: Publish multi-platform image
-    needs: build
+  manifest:
+    name: Assemble candidate manifest
+    needs: [validate, build]
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write # push the multi-platform manifest to GHCR
-      id-token: write # sign the build provenance attestation
-      attestations: write # write the attestation to GHCR
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
     steps:
-      - name: Download image digests
+      - name: Download candidate digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: /tmp/digests
+          path: ${{ runner.temp }}/digests
           pattern: digest-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Log in to GHCR
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+      - name: Log in to the candidate registry
+        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract image metadata (tags + labels)
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && github.event.release.prerelease == false }}
-            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
-          flavor: |
-            latest=false
-
-      - name: Create and push multi-platform manifest
+      - name: Create immutable multi-platform candidate
         id: manifest
-        working-directory: /tmp/digests
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
-
-          tag_args=()
-          for tag in "${tags[@]}"; do
-            tag_args+=(--tag "$tag")
-          done
+          set -euo pipefail
+          if docker buildx imagetools inspect "$CANDIDATE_IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "Candidate tag $VERSION already exists and cannot be overwritten." >&2
+            exit 1
+          fi
 
           sources=()
-          for digest in *; do
-            sources+=("${IMAGE_NAME}@sha256:${digest}")
-          done
+          while IFS= read -r digest_file; do
+            sources+=("$CANDIDATE_IMAGE@sha256:$(basename "$digest_file")")
+          done < <(find "$RUNNER_TEMP/digests" -maxdepth 1 -type f | sort)
+          test "${#sources[@]}" -eq 2
 
           docker buildx imagetools create \
-            "${tag_args[@]}" \
-            --metadata-file /tmp/manifest-metadata.json \
+            --tag "$CANDIDATE_IMAGE:$VERSION" \
+            --metadata-file "$RUNNER_TEMP/manifest.json" \
             "${sources[@]}"
 
-          echo "digest=$(jq -er '.["containerimage.descriptor"].digest' /tmp/manifest-metadata.json)" >> "$GITHUB_OUTPUT"
-        env:
-          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+          digest="$(jq -er '.["containerimage.descriptor"].digest' "$RUNNER_TEMP/manifest.json")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Attest build provenance
+  publish:
+    name: Scan, attest, sign, and publish
+    needs: [validate, manifest]
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to the candidate registry
+        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb8139d63bd1b592d99c9f979dd42b386cf3a8 # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+
+      - name: Scan candidate and generate SBOMs
+        shell: bash
+        env:
+          DIGEST: ${{ needs.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trivy-cache" "$RUNNER_TEMP/evidence"
+
+          for arch in amd64 arm64; do
+            platform="linux/$arch"
+            docker run --rm \
+              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              "$TRIVY_IMAGE" image \
+              --image-platform "$platform" \
+              --scanners vuln \
+              --pkg-types os,library \
+              --severity HIGH,CRITICAL \
+              --exit-code 1 \
+              "$CANDIDATE_IMAGE@$DIGEST"
+
+            docker run --rm \
+              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              -v "$RUNNER_TEMP/evidence:/evidence" \
+              "$TRIVY_IMAGE" image \
+              --image-platform "$platform" \
+              --scanners vuln \
+              --pkg-types os,library \
+              --format json \
+              --output "/evidence/trivy-candidate-$arch.json" \
+              "$CANDIDATE_IMAGE@$DIGEST"
+
+            docker run --rm \
+              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              -v "$RUNNER_TEMP/evidence:/evidence" \
+              "$TRIVY_IMAGE" image \
+              --image-platform "$platform" \
+              --format cyclonedx \
+              --output "/evidence/sbom-$arch.cdx.json" \
+              "$CANDIDATE_IMAGE@$DIGEST"
+          done
+
+      - name: Reject mutable destination tags
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          for target in "$GAR_IMAGE:$VERSION" "$DOCKERHUB_IMAGE:$VERSION"; do
+            if docker run --rm \
+              -v "$HOME/.docker:/root/.docker:ro" \
+              "$SKOPEO_IMAGE" inspect "docker://$target" >/dev/null 2>&1; then
+              echo "Immutable destination $target already exists." >&2
+              exit 1
+            fi
+          done
+
+      - name: Copy approved manifest to Artifact Registry
+        shell: bash
+        env:
+          DIGEST: ${{ needs.manifest.outputs.digest }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$HOME/.docker:/root/.docker:ro" \
+            "$SKOPEO_IMAGE" copy --all --preserve-digests \
+            "docker://$CANDIDATE_IMAGE@$DIGEST" \
+            "docker://$GAR_IMAGE:$VERSION"
+
+          copied_digest="$(docker run --rm \
+            -v "$HOME/.docker:/root/.docker:ro" \
+            "$SKOPEO_IMAGE" inspect --format '{{.Digest}}' "docker://$GAR_IMAGE:$VERSION")"
+          test "$copied_digest" = "$DIGEST"
+
+      - name: Re-scan Artifact Registry digest
+        shell: bash
+        env:
+          DIGEST: ${{ needs.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            docker run --rm \
+              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              -v "$RUNNER_TEMP/evidence:/evidence" \
+              "$TRIVY_IMAGE" image \
+              --image-platform "linux/$arch" \
+              --scanners vuln \
+              --pkg-types os,library \
+              --severity HIGH,CRITICAL \
+              --exit-code 1 \
+              --format json \
+              --output "/evidence/trivy-gar-$arch.json" \
+              "$GAR_IMAGE@$DIGEST"
+          done
+
+      - name: Attest Artifact Registry provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-name: ${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.manifest.outputs.digest }}
+          subject-name: ${{ env.GAR_IMAGE }}
+          subject-digest: ${{ needs.manifest.outputs.digest }}
           push-to-registry: true
+
+      - name: Sign and attest Artifact Registry digest
+        shell: bash
+        env:
+          DIGEST: ${{ needs.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$GAR_IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx \
+            --predicate "$RUNNER_TEMP/evidence/sbom-amd64.cdx.json" \
+            "$GAR_IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx \
+            --predicate "$RUNNER_TEMP/evidence/sbom-arm64.cdx.json" \
+            "$GAR_IMAGE@$DIGEST"
+
+      - name: Copy approved manifest to public Docker Hub
+        shell: bash
+        env:
+          DIGEST: ${{ needs.manifest.outputs.digest }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$HOME/.docker:/root/.docker:ro" \
+            "$SKOPEO_IMAGE" copy --all --preserve-digests \
+            "docker://$GAR_IMAGE@$DIGEST" \
+            "docker://$DOCKERHUB_IMAGE:$VERSION"
+
+          copied_digest="$(docker run --rm \
+            -v "$HOME/.docker:/root/.docker:ro" \
+            "$SKOPEO_IMAGE" inspect --format '{{.Digest}}' "docker://$DOCKERHUB_IMAGE:$VERSION")"
+          test "$copied_digest" = "$DIGEST"
+
+      - name: Attest Docker Hub provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.DOCKERHUB_IMAGE }}
+          subject-digest: ${{ needs.manifest.outputs.digest }}
+          push-to-registry: true
+
+      - name: Sign, attest, and verify published digests
+        shell: bash
+        env:
+          DIGEST: ${{ needs.manifest.outputs.digest }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          identity='^https://github.com/ioterax/shoutrrr/.github/workflows/release\.yml@refs/heads/master$'
+          issuer='https://token.actions.githubusercontent.com'
+
+          cosign sign --yes "$DOCKERHUB_IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx \
+            --predicate "$RUNNER_TEMP/evidence/sbom-amd64.cdx.json" \
+            "$DOCKERHUB_IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx \
+            --predicate "$RUNNER_TEMP/evidence/sbom-arm64.cdx.json" \
+            "$DOCKERHUB_IMAGE@$DIGEST"
+
+          for target in "$GAR_IMAGE@$DIGEST" "$DOCKERHUB_IMAGE@$DIGEST"; do
+            cosign verify \
+              --certificate-identity-regexp "$identity" \
+              --certificate-oidc-issuer "$issuer" \
+              "$target" >/dev/null
+            cosign verify-attestation \
+              --type cyclonedx \
+              --certificate-identity-regexp "$identity" \
+              --certificate-oidc-issuer "$issuer" \
+              "$target" >/dev/null
+          done
+
+          {
+            echo "version=$VERSION"
+            echo "digest=$DIGEST"
+            echo "artifact_registry=$GAR_IMAGE@$DIGEST"
+            echo "docker_hub=$DOCKERHUB_IMAGE@$DIGEST"
+            echo "commit=$GITHUB_SHA"
+          } > "$RUNNER_TEMP/evidence/release.txt"
+
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-evidence-${{ needs.validate.outputs.version }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: warn
+          retention-days: 90

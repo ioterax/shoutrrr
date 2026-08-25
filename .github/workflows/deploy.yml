@@ -1,0 +1,374 @@
+name: deploy-production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable release version published by the release workflow
+        required: true
+        type: string
+      image_digest:
+        description: Approved Artifact Registry manifest digest (sha256:...)
+        required: true
+        type: string
+      promote_web_traffic:
+        description: Promote the ready web revision to 100 percent traffic
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: read
+
+concurrency:
+  group: shoutrrr-production
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: ioterax-prd
+  REGION: europe-west1
+  GAR_IMAGE: europe-west1-docker.pkg.dev/ioterax-prd/ioterax-images/shoutrrr
+  WIF_PROVIDER: projects/913330680454/locations/global/workloadIdentityPools/github-actions-pool/providers/shoutrrr
+  WIF_SERVICE_ACCOUNT: github-shoutrrr-deployer@ioterax-prd.iam.gserviceaccount.com
+  TRIVY_IMAGE: aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 # 0.74.0
+
+jobs:
+  deploy:
+    name: Deploy approved digest
+    runs-on: ubuntu-24.04
+    environment: production
+    env:
+      DB_HOST: ${{ vars.SHOUTRRR_DB_HOST }}
+      APP_KEY_VERSION: ${{ vars.SHOUTRRR_APP_KEY_VERSION }}
+      PASSKEY_VERSION: ${{ vars.SHOUTRRR_PASSKEY_SECRET_VERSION }}
+      DB_PASSWORD_VERSION: ${{ vars.SHOUTRRR_DB_PASSWORD_VERSION }}
+      PASSPORT_PRIVATE_KEY_VERSION: ${{ vars.SHOUTRRR_PASSPORT_PRIVATE_KEY_VERSION }}
+      PASSPORT_PUBLIC_KEY_VERSION: ${{ vars.SHOUTRRR_PASSPORT_PUBLIC_KEY_VERSION }}
+      RESEND_API_KEY_VERSION: ${{ vars.SHOUTRRR_RESEND_API_KEY_VERSION }}
+      X_CLIENT_ID_VERSION: ${{ vars.SHOUTRRR_X_CLIENT_ID_VERSION }}
+      X_CLIENT_SECRET_VERSION: ${{ vars.SHOUTRRR_X_CLIENT_SECRET_VERSION }}
+      LINKEDIN_CLIENT_ID_VERSION: ${{ vars.SHOUTRRR_LINKEDIN_CLIENT_ID_VERSION }}
+      LINKEDIN_CLIENT_SECRET_VERSION: ${{ vars.SHOUTRRR_LINKEDIN_CLIENT_SECRET_VERSION }}
+      FACEBOOK_CLIENT_ID_VERSION: ${{ vars.SHOUTRRR_FACEBOOK_CLIENT_ID_VERSION }}
+      FACEBOOK_CLIENT_SECRET_VERSION: ${{ vars.SHOUTRRR_FACEBOOK_CLIENT_SECRET_VERSION }}
+      THREADS_CLIENT_ID_VERSION: ${{ vars.SHOUTRRR_THREADS_CLIENT_ID_VERSION }}
+      THREADS_CLIENT_SECRET_VERSION: ${{ vars.SHOUTRRR_THREADS_CLIENT_SECRET_VERSION }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+
+      - name: Validate protected inputs and Terraform-owned shells
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "ioterax/shoutrrr"
+          test "$GITHUB_REF" = "refs/heads/master"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ioterax\.[1-9][0-9]*$ ]]
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          positive_integer() {
+            [[ "$1" =~ ^[1-9][0-9]*$ ]]
+          }
+
+          test -n "$DB_HOST"
+          for version in \
+            "$APP_KEY_VERSION" \
+            "$PASSKEY_VERSION" \
+            "$DB_PASSWORD_VERSION" \
+            "$PASSPORT_PRIVATE_KEY_VERSION" \
+            "$PASSPORT_PUBLIC_KEY_VERSION" \
+            "$RESEND_API_KEY_VERSION"; do
+            positive_integer "$version"
+          done
+
+          for pair in \
+            "$X_CLIENT_ID_VERSION:$X_CLIENT_SECRET_VERSION" \
+            "$LINKEDIN_CLIENT_ID_VERSION:$LINKEDIN_CLIENT_SECRET_VERSION" \
+            "$FACEBOOK_CLIENT_ID_VERSION:$FACEBOOK_CLIENT_SECRET_VERSION" \
+            "$THREADS_CLIENT_ID_VERSION:$THREADS_CLIENT_SECRET_VERSION"; do
+            left="${pair%%:*}"
+            right="${pair#*:}"
+            if [[ -n "$left" || -n "$right" ]]; then
+              positive_integer "$left"
+              positive_integer "$right"
+            fi
+          done
+
+          gcloud artifacts docker images describe "$GAR_IMAGE@$DIGEST" \
+            --project "$PROJECT_ID" >/dev/null
+          gcloud run services describe shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" >/dev/null
+          for job in shoutrrr-migrate shoutrrr-scheduler shoutrrr-queue-worker; do
+            gcloud run jobs describe "$job" \
+              --project "$PROJECT_ID" --region "$REGION" >/dev/null
+          done
+
+      - name: Re-scan immutable deployment input
+        shell: bash
+        env:
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trivy-cache" "$RUNNER_TEMP/deploy-evidence"
+          for arch in amd64 arm64; do
+            docker run --rm \
+              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              -v "$RUNNER_TEMP/deploy-evidence:/evidence" \
+              "$TRIVY_IMAGE" image \
+              --image-platform "linux/$arch" \
+              --scanners vuln \
+              --pkg-types os,library \
+              --severity HIGH,CRITICAL \
+              --exit-code 1 \
+              --format json \
+              --output "/evidence/trivy-$arch.json" \
+              "$GAR_IMAGE@$DIGEST"
+          done
+
+      - name: Verify provenance, signature, and SBOM attestation
+        shell: bash
+        env:
+          DIGEST: ${{ inputs.image_digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          target="$GAR_IMAGE@$DIGEST"
+          identity='^https://github.com/ioterax/shoutrrr/.github/workflows/release\.yml@refs/heads/master$'
+          issuer='https://token.actions.githubusercontent.com'
+
+          gh attestation verify "oci://$target" --repo ioterax/shoutrrr
+          cosign verify \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$target" >/dev/null
+          cosign verify-attestation \
+            --type cyclonedx \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$target" >/dev/null
+
+      - name: Prepare reviewed runtime configuration
+        id: config
+        shell: bash
+        env:
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          runtime_file="$RUNNER_TEMP/shoutrrr-runtime.yaml"
+          secrets_file="$RUNNER_TEMP/shoutrrr-secrets.txt"
+
+          {
+            echo 'APP_NAME: "iot.EraX Shout"'
+            echo 'APP_ENV: "production"'
+            echo 'APP_DEBUG: "false"'
+            echo 'APP_URL: "https://shout.ioterax.app"'
+            echo 'SESSION_SECURE_COOKIE: "true"'
+            echo 'OCTANE_SERVER: "frankenphp"'
+            echo 'OCTANE_HTTPS: "true"'
+            echo 'TRUSTED_PROXIES: "*"'
+            echo 'INERTIA_SSR_ENABLED: "false"'
+            echo 'QUEUE_WORKER_ENABLED: "false"'
+            echo 'SCHEDULER_ENABLED: "false"'
+            echo 'DB_CONNECTION: "pgsql"'
+            printf 'DB_HOST: "%s"\n' "$DB_HOST"
+            echo 'DB_PORT: "5432"'
+            echo 'DB_DATABASE: "shoutrrr"'
+            echo 'DB_USERNAME: "shoutrrr"'
+            echo 'DB_SSLMODE: "require"'
+            echo 'CACHE_STORE: "database"'
+            echo 'QUEUE_CONNECTION: "database"'
+            echo 'SESSION_DRIVER: "database"'
+            echo 'FILESYSTEM_DISK: "public"'
+            echo 'PASSPORT_AUTO_GENERATE_KEYS: "false"'
+            echo 'MAIL_MAILER: "resend"'
+            echo 'MAIL_FROM_ADDRESS: "security@ioterax.com"'
+            echo 'MAIL_FROM_NAME: "iot.EraX Security"'
+            echo 'LOG_CHANNEL: "stderr"'
+            echo 'SOCIALITE_ENABLED: "false"'
+            echo 'X_REDIRECT_URI: "https://shout.ioterax.app/accounts/callback/x"'
+            echo 'LINKEDIN_REDIRECT_URI: "https://shout.ioterax.app/accounts/callback/linkedin"'
+            echo 'FACEBOOK_REDIRECT_URI: "https://shout.ioterax.app/accounts/callback/meta"'
+            echo 'THREADS_REDIRECT_URI: "https://shout.ioterax.app/accounts/callback/threads"'
+          } > "$runtime_file"
+
+          secrets=(
+            "APP_KEY=shoutrrr-app-key:$APP_KEY_VERSION"
+            "PASSKEYS_USER_HANDLE_SECRET=shoutrrr-passkeys-user-handle-secret:$PASSKEY_VERSION"
+            "DB_PASSWORD=projects/foundation-hub-504212/secrets/shoutrrr-database-password:$DB_PASSWORD_VERSION"
+            "PASSPORT_PRIVATE_KEY=shoutrrr-passport-private-key:$PASSPORT_PRIVATE_KEY_VERSION"
+            "PASSPORT_PUBLIC_KEY=shoutrrr-passport-public-key:$PASSPORT_PUBLIC_KEY_VERSION"
+            "RESEND_API_KEY=shoutrrr-resend-api-key:$RESEND_API_KEY_VERSION"
+          )
+
+          add_provider_pair() {
+            local id_name="$1"
+            local id_secret="$2"
+            local id_version="$3"
+            local secret_name="$4"
+            local secret_secret="$5"
+            local secret_version="$6"
+            if [[ -n "$id_version" ]]; then
+              secrets+=("$id_name=$id_secret:$id_version")
+              secrets+=("$secret_name=$secret_secret:$secret_version")
+            fi
+          }
+
+          add_provider_pair X_CLIENT_ID shoutrrr-x-client-id "$X_CLIENT_ID_VERSION" \
+            X_CLIENT_SECRET shoutrrr-x-client-secret "$X_CLIENT_SECRET_VERSION"
+          add_provider_pair LINKEDIN_CLIENT_ID shoutrrr-linkedin-client-id "$LINKEDIN_CLIENT_ID_VERSION" \
+            LINKEDIN_CLIENT_SECRET shoutrrr-linkedin-client-secret "$LINKEDIN_CLIENT_SECRET_VERSION"
+          add_provider_pair FACEBOOK_CLIENT_ID shoutrrr-facebook-client-id "$FACEBOOK_CLIENT_ID_VERSION" \
+            FACEBOOK_CLIENT_SECRET shoutrrr-facebook-client-secret "$FACEBOOK_CLIENT_SECRET_VERSION"
+          add_provider_pair THREADS_CLIENT_ID shoutrrr-threads-client-id "$THREADS_CLIENT_ID_VERSION" \
+            THREADS_CLIENT_SECRET shoutrrr-threads-client-secret "$THREADS_CLIENT_SECRET_VERSION"
+
+          (IFS=,; echo "${secrets[*]}") > "$secrets_file"
+          echo "runtime_file=$runtime_file" >> "$GITHUB_OUTPUT"
+          echo "secrets_file=$secrets_file" >> "$GITHUB_OUTPUT"
+          echo "image=$GAR_IMAGE@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Update and execute migration Job
+        shell: bash
+        env:
+          IMAGE: ${{ steps.config.outputs.image }}
+          RUNTIME_FILE: ${{ steps.config.outputs.runtime_file }}
+          SECRETS_FILE: ${{ steps.config.outputs.secrets_file }}
+        run: |
+          set -euo pipefail
+          secrets="$(<"$SECRETS_FILE")"
+          gcloud run jobs update shoutrrr-migrate \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE" \
+            --env-vars-file "$RUNTIME_FILE" \
+            --set-secrets "$secrets" \
+            --quiet
+          gcloud run jobs execute shoutrrr-migrate \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --wait
+
+      - name: Update terminating background Jobs
+        shell: bash
+        env:
+          IMAGE: ${{ steps.config.outputs.image }}
+          RUNTIME_FILE: ${{ steps.config.outputs.runtime_file }}
+          SECRETS_FILE: ${{ steps.config.outputs.secrets_file }}
+        run: |
+          set -euo pipefail
+          secrets="$(<"$SECRETS_FILE")"
+          for job in shoutrrr-scheduler shoutrrr-queue-worker; do
+            gcloud run jobs update "$job" \
+              --project "$PROJECT_ID" \
+              --region "$REGION" \
+              --image "$IMAGE" \
+              --env-vars-file "$RUNTIME_FILE" \
+              --set-secrets "$secrets" \
+              --quiet
+          done
+
+      - name: Create ready web revision without traffic
+        id: web
+        shell: bash
+        env:
+          IMAGE: ${{ steps.config.outputs.image }}
+          RUNTIME_FILE: ${{ steps.config.outputs.runtime_file }}
+          SECRETS_FILE: ${{ steps.config.outputs.secrets_file }}
+        run: |
+          set -euo pipefail
+          previous="$(gcloud run services describe shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format='value(status.latestReadyRevisionName)')"
+          secrets="$(<"$SECRETS_FILE")"
+          suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}"
+
+          gcloud run services update shoutrrr \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE" \
+            --env-vars-file "$RUNTIME_FILE" \
+            --set-secrets "$secrets" \
+            --revision-suffix "$suffix" \
+            --no-traffic \
+            --quiet
+
+          revision="$(gcloud run services describe shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format='value(status.latestCreatedRevisionName)')"
+          ready="$(gcloud run services describe shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format='value(status.latestReadyRevisionName)')"
+          test "$revision" = "$ready"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Promote web traffic
+        if: inputs.promote_web_traffic
+        shell: bash
+        env:
+          REVISION: ${{ steps.web.outputs.revision }}
+          PREVIOUS_REVISION: ${{ steps.web.outputs.previous }}
+        run: |
+          set -euo pipefail
+          restore_previous() {
+            if [[ -n "$PREVIOUS_REVISION" ]]; then
+              gcloud run services update-traffic shoutrrr \
+                --project "$PROJECT_ID" --region "$REGION" \
+                --to-revisions "$PREVIOUS_REVISION=100" --quiet
+            fi
+          }
+          trap restore_previous ERR
+          gcloud run services update-traffic shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --to-revisions "$REVISION=100" --quiet
+          trap - ERR
+
+      - name: Record deployment evidence
+        if: always()
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          DIGEST: ${{ inputs.image_digest }}
+          REVISION: ${{ steps.web.outputs.revision }}
+          PROMOTED: ${{ inputs.promote_web_traffic }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/deploy-evidence"
+          {
+            echo "version=$VERSION"
+            echo "digest=$DIGEST"
+            echo "revision=$REVISION"
+            echo "promoted=$PROMOTED"
+            echo "commit=$GITHUB_SHA"
+          } > "$RUNNER_TEMP/deploy-evidence/deployment.txt"
+
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deployment-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/deploy-evidence
+          if-no-files-found: warn
+          retention-days: 90
