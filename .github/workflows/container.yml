@@ -61,11 +61,27 @@ jobs:
           portable_auth_mount_count="$(grep -hF '$RUNNER_TEMP/registry-auth:/root/.docker:ro' \
             .github/workflows/release.yml \
             .github/workflows/deploy.yml | wc -l)"
-          test "$portable_auth_mount_count" -eq 8
+          test "$portable_auth_mount_count" -eq 5
 
-          skopeo_authfile_count="$(grep -F -- '--authfile /root/.docker/config.json' \
+          buildx_setup_count="$(grep -F 'uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c' \
             .github/workflows/release.yml | wc -l)"
-          test "$skopeo_authfile_count" -eq 3
+          test "$buildx_setup_count" -eq 3
+
+          imagetools_create_count="$(grep -F 'docker buildx imagetools create' \
+            .github/workflows/release.yml | wc -l)"
+          test "$imagetools_create_count" -eq 2
+
+          grep -F 'docker buildx imagetools inspect "$GAR_IMAGE:$VERSION"' \
+            .github/workflows/release.yml
+          grep -F -- '--metadata-file "$RUNNER_TEMP/published-manifest.json"' \
+            .github/workflows/release.yml
+          grep -F 'test "$copied_digest" = "$DIGEST"' \
+            .github/workflows/release.yml
+
+          if grep -F 'SKOPEO_IMAGE' .github/workflows/release.yml; then
+            echo 'Release publication must not depend on an external Skopeo image.' >&2
+            exit 1
+          fi
 
           portable_auth_action=.github/actions/portable-registry-auth/action.yml
           grep -F 'registry_auth_dir="$RUNNER_TEMP/registry-auth"' "$portable_auth_action"

@@ -21,7 +21,6 @@ env:
   CANDIDATE_IMAGE: europe-west1-docker.pkg.dev/ioterax-prd/ioterax-images/shoutrrr-candidate
   GAR_IMAGE: europe-west1-docker.pkg.dev/ioterax-prd/ioterax-images/shoutrrr
   TRIVY_IMAGE: aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 # 0.74.0
-  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:17da3ac5cadf2b27a3dcf7dea857c4cea558ef757641725fc0eec560030057b3 # 1.22.2
   WIF_PROVIDER: projects/913330680454/locations/global/workloadIdentityPools/github-actions-pool/providers/shoutrrr
   WIF_SERVICE_ACCOUNT: github-shoutrrr-deployer@ioterax-prd.iam.gserviceaccount.com
 
@@ -188,6 +187,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -256,16 +258,10 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          for target in "$GAR_IMAGE:$VERSION"; do
-            if docker run --rm \
-              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
-              "$SKOPEO_IMAGE" inspect \
-              --authfile /root/.docker/config.json \
-              "docker://$target" >/dev/null 2>&1; then
-              echo "Immutable destination $target already exists." >&2
-              exit 1
-            fi
-          done
+          if docker buildx imagetools inspect "$GAR_IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "Immutable destination $GAR_IMAGE:$VERSION already exists." >&2
+            exit 1
+          fi
 
       - name: Copy approved manifest to Artifact Registry
         shell: bash
@@ -274,19 +270,14 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          docker run --rm \
-            -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
-            "$SKOPEO_IMAGE" copy \
-            --authfile /root/.docker/config.json \
-            --all --preserve-digests \
-            "docker://$CANDIDATE_IMAGE@$DIGEST" \
-            "docker://$GAR_IMAGE:$VERSION"
+          docker buildx imagetools create \
+            --tag "$GAR_IMAGE:$VERSION" \
+            --metadata-file "$RUNNER_TEMP/published-manifest.json" \
+            "$CANDIDATE_IMAGE@$DIGEST"
 
-          copied_digest="$(docker run --rm \
-            -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
-            "$SKOPEO_IMAGE" inspect \
-            --authfile /root/.docker/config.json \
-            --format '{{.Digest}}' "docker://$GAR_IMAGE:$VERSION")"
+          copied_digest="$(jq -er \
+            '.["containerimage.descriptor"].digest' \
+            "$RUNNER_TEMP/published-manifest.json")"
           test "$copied_digest" = "$DIGEST"
 
       - name: Re-scan Artifact Registry digest
