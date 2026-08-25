@@ -1,5 +1,5 @@
 name: Portable Artifact Registry authentication
-description: Creates a short-lived helper-free registry auth file for containerized security tools.
+description: Creates a short-lived helper-free registry auth home for containerized and host security tools.
 
 runs:
   using: composite
@@ -10,18 +10,19 @@ runs:
         REGISTRY_HOST: europe-west1-docker.pkg.dev
       run: |
         set -euo pipefail
-        registry_auth_dir="$RUNNER_TEMP/registry-auth"
+        registry_auth_home="$RUNNER_TEMP/registry-auth"
+        docker_config_dir="$registry_auth_home/.docker"
         umask 077
-        mkdir -p "$registry_auth_dir"
+        mkdir -p "$docker_config_dir"
         access_token="$(gcloud auth print-access-token)"
         registry_auth="$(printf 'oauth2accesstoken:%s' "$access_token" | base64 | tr -d '\n')"
         unset access_token
         printf '%s\n' "$registry_auth" | jq -Rn --arg registry "$REGISTRY_HOST" '
           input as $auth | {auths: {($registry): {auth: $auth}}}
-        ' > "$registry_auth_dir/config.json"
+        ' > "$docker_config_dir/config.json"
         unset registry_auth
         jq -e --arg registry "$REGISTRY_HOST" '
           ((.credsStore // "") == "") and
           (((.credHelpers // {}) | length) == 0) and
           (.auths[$registry].auth | type == "string" and length > 0)
-        ' "$registry_auth_dir/config.json" >/dev/null
+        ' "$docker_config_dir/config.json" >/dev/null

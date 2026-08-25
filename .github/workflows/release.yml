@@ -219,7 +219,7 @@ jobs:
           for arch in amd64 arm64; do
             platform="linux/$arch"
             docker run --rm \
-              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth/.docker:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               "$TRIVY_IMAGE" image \
               --platform "$platform" \
@@ -230,7 +230,7 @@ jobs:
               "$CANDIDATE_IMAGE@$DIGEST"
 
             docker run --rm \
-              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth/.docker:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               -v "$RUNNER_TEMP/evidence:/evidence" \
               "$TRIVY_IMAGE" image \
@@ -242,7 +242,7 @@ jobs:
               "$CANDIDATE_IMAGE@$DIGEST"
 
             docker run --rm \
-              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth/.docker:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               -v "$RUNNER_TEMP/evidence:/evidence" \
               "$TRIVY_IMAGE" image \
@@ -288,7 +288,7 @@ jobs:
           set -euo pipefail
           for arch in amd64 arm64; do
             docker run --rm \
-              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth/.docker:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               -v "$RUNNER_TEMP/evidence:/evidence" \
               "$TRIVY_IMAGE" image \
@@ -304,6 +304,8 @@ jobs:
 
       - name: Attest Artifact Registry provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        env:
+          HOME: ${{ runner.temp }}/registry-auth
         with:
           subject-name: ${{ env.GAR_IMAGE }}
           subject-digest: ${{ needs.manifest.outputs.digest }}
