@@ -32,14 +32,15 @@ USER root
 COPY --from=frankenphp-builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 RUN apk upgrade --no-cache \
     && apk add --no-cache ffmpeg \
-    && install-php-extensions bcmath exif gd pcntl pdo_pgsql \
+    && install-php-extensions bcmath exif gd pcntl pdo_pgsql redis-6.3.0 \
     && rm -f /usr/local/bin/install-php-extensions \
     && frankenphp version \
     && php -m | grep -Fx bcmath \
     && php -m | grep -Fx exif \
     && php -m | grep -Fx gd \
     && php -m | grep -Fx pcntl \
-    && php -m | grep -Fx pdo_pgsql
+    && php -m | grep -Fx pdo_pgsql \
+    && php -m | grep -Fx redis
 
 # Composer is copied from an immutable Composer 2.10.2 manifest. It never
 # enters the final image.

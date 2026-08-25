@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceMembership;
 use Illuminate\Database\Seeder;
+use LogicException;
 
 class DefaultUserSeeder extends Seeder
 {
@@ -16,6 +17,10 @@ class DefaultUserSeeder extends Seeder
      */
     public function run(): void
     {
+        if (! app()->isLocal()) {
+            throw new LogicException('The default development users may be seeded only in the local environment.');
+        }
+
         $user = User::query()->firstOrCreate(
             ['email' => 'test@example.com'],
             [

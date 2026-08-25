@@ -44,6 +44,9 @@ jobs:
       APP_KEY_VERSION: ${{ vars.SHOUTRRR_APP_KEY_VERSION }}
       PASSKEY_VERSION: ${{ vars.SHOUTRRR_PASSKEY_SECRET_VERSION }}
       DB_PASSWORD_VERSION: ${{ vars.SHOUTRRR_DB_PASSWORD_VERSION }}
+      REDIS_HOST_VERSION: ${{ vars.SHOUTRRR_REDIS_HOST_VERSION }}
+      REDIS_PASSWORD_VERSION: ${{ vars.SHOUTRRR_REDIS_PASSWORD_VERSION }}
+      REDIS_TLS_CA_VERSION: ${{ vars.SHOUTRRR_REDIS_TLS_CA_VERSION }}
       PASSPORT_PRIVATE_KEY_VERSION: ${{ vars.SHOUTRRR_PASSPORT_PRIVATE_KEY_VERSION }}
       PASSPORT_PUBLIC_KEY_VERSION: ${{ vars.SHOUTRRR_PASSPORT_PUBLIC_KEY_VERSION }}
       RESEND_API_KEY_VERSION: ${{ vars.SHOUTRRR_RESEND_API_KEY_VERSION }}
@@ -97,6 +100,9 @@ jobs:
             "$APP_KEY_VERSION" \
             "$PASSKEY_VERSION" \
             "$DB_PASSWORD_VERSION" \
+            "$REDIS_HOST_VERSION" \
+            "$REDIS_PASSWORD_VERSION" \
+            "$REDIS_TLS_CA_VERSION" \
             "$PASSPORT_PRIVATE_KEY_VERSION" \
             "$PASSPORT_PUBLIC_KEY_VERSION" \
             "$RESEND_API_KEY_VERSION"; do
@@ -198,9 +204,19 @@ jobs:
             echo 'DB_DATABASE: "shoutrrr"'
             echo 'DB_USERNAME: "shoutrrr"'
             echo 'DB_SSLMODE: "require"'
-            echo 'CACHE_STORE: "database"'
-            echo 'QUEUE_CONNECTION: "database"'
-            echo 'SESSION_DRIVER: "database"'
+            echo 'REDIS_CLIENT: "phpredis"'
+            echo 'REDIS_SCHEME: "tls"'
+            echo 'REDIS_PORT: "6379"'
+            echo 'REDIS_DB: "0"'
+            echo 'REDIS_CACHE_DB: "1"'
+            echo 'REDIS_PREFIX: "ioterax-shoutrrr-prod-"'
+            echo 'REDIS_TLS_CA_PATH: "/var/www/html/storage/secrets/redis-ca.crt"'
+            echo 'REDIS_TLS_VERIFY_PEER: "true"'
+            echo 'REDIS_TLS_VERIFY_PEER_NAME: "true"'
+            echo 'CACHE_STORE: "redis"'
+            echo 'QUEUE_CONNECTION: "redis"'
+            echo 'SESSION_DRIVER: "redis"'
+            echo 'SESSION_CONNECTION: "cache"'
             echo 'FILESYSTEM_DISK: "public"'
             echo 'PASSPORT_AUTO_GENERATE_KEYS: "false"'
             echo 'MAIL_MAILER: "resend"'
@@ -218,6 +234,9 @@ jobs:
             "APP_KEY=shoutrrr-app-key:$APP_KEY_VERSION"
             "PASSKEYS_USER_HANDLE_SECRET=shoutrrr-passkeys-user-handle-secret:$PASSKEY_VERSION"
             "DB_PASSWORD=projects/foundation-hub-504212/secrets/shoutrrr-database-password:$DB_PASSWORD_VERSION"
+            "REDIS_HOST=redis-host:$REDIS_HOST_VERSION"
+            "REDIS_PASSWORD=redis-password:$REDIS_PASSWORD_VERSION"
+            "/var/www/html/storage/secrets/redis-ca.crt=redis-tls-ca-certificate:$REDIS_TLS_CA_VERSION"
             "PASSPORT_PRIVATE_KEY=shoutrrr-passport-private-key:$PASSPORT_PRIVATE_KEY_VERSION"
             "PASSPORT_PUBLIC_KEY=shoutrrr-passport-public-key:$PASSPORT_PUBLIC_KEY_VERSION"
             "RESEND_API_KEY=shoutrrr-resend-api-key:$RESEND_API_KEY_VERSION"
@@ -269,6 +288,16 @@ jobs:
           gcloud run jobs execute shoutrrr-migrate \
             --project "$PROJECT_ID" \
             --region "$REGION" \
+            --wait
+
+      - name: Reject bundled development users in production
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute shoutrrr-migrate \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --args=/var/www/html/artisan,production:assert-no-demo-users,--no-interaction \
             --wait
 
       - name: Update terminating background Jobs

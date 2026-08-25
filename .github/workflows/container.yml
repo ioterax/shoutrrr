@@ -70,6 +70,7 @@ jobs:
             test "$(id -u)" = 82
             php -r '\''exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 5 ? 0 : 1);'\''
             php -r '\''exit(extension_loaded("pcntl") && defined("SIGINT") ? 0 : 1);'\''
+            php -r '\''exit(extension_loaded("redis") ? 0 : 1);'\''
             test -L public/storage
             test ! -e node_modules
             ! command -v bun
