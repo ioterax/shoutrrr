@@ -200,6 +200,9 @@ jobs:
       - name: Configure Artifact Registry authentication
         run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
 
+      - name: Create portable registry authentication
+        uses: ./.github/actions/portable-registry-auth
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
 
@@ -214,7 +217,7 @@ jobs:
           for arch in amd64 arm64; do
             platform="linux/$arch"
             docker run --rm \
-              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               "$TRIVY_IMAGE" image \
               --platform "$platform" \
@@ -225,7 +228,7 @@ jobs:
               "$CANDIDATE_IMAGE@$DIGEST"
 
             docker run --rm \
-              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               -v "$RUNNER_TEMP/evidence:/evidence" \
               "$TRIVY_IMAGE" image \
@@ -237,7 +240,7 @@ jobs:
               "$CANDIDATE_IMAGE@$DIGEST"
 
             docker run --rm \
-              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               -v "$RUNNER_TEMP/evidence:/evidence" \
               "$TRIVY_IMAGE" image \
@@ -255,8 +258,10 @@ jobs:
           set -euo pipefail
           for target in "$GAR_IMAGE:$VERSION"; do
             if docker run --rm \
-              -v "$HOME/.docker:/root/.docker:ro" \
-              "$SKOPEO_IMAGE" inspect "docker://$target" >/dev/null 2>&1; then
+              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
+              "$SKOPEO_IMAGE" inspect \
+              --authfile /root/.docker/config.json \
+              "docker://$target" >/dev/null 2>&1; then
               echo "Immutable destination $target already exists." >&2
               exit 1
             fi
@@ -270,14 +275,18 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "$HOME/.docker:/root/.docker:ro" \
-            "$SKOPEO_IMAGE" copy --all --preserve-digests \
+            -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
+            "$SKOPEO_IMAGE" copy \
+            --authfile /root/.docker/config.json \
+            --all --preserve-digests \
             "docker://$CANDIDATE_IMAGE@$DIGEST" \
             "docker://$GAR_IMAGE:$VERSION"
 
           copied_digest="$(docker run --rm \
-            -v "$HOME/.docker:/root/.docker:ro" \
-            "$SKOPEO_IMAGE" inspect --format '{{.Digest}}' "docker://$GAR_IMAGE:$VERSION")"
+            -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
+            "$SKOPEO_IMAGE" inspect \
+            --authfile /root/.docker/config.json \
+            --format '{{.Digest}}' "docker://$GAR_IMAGE:$VERSION")"
           test "$copied_digest" = "$DIGEST"
 
       - name: Re-scan Artifact Registry digest
@@ -288,7 +297,7 @@ jobs:
           set -euo pipefail
           for arch in amd64 arm64; do
             docker run --rm \
-              -v "$HOME/.docker:/root/.docker:ro" \
+              -v "$RUNNER_TEMP/registry-auth:/root/.docker:ro" \
               -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               -v "$RUNNER_TEMP/evidence:/evidence" \
               "$TRIVY_IMAGE" image \
@@ -349,6 +358,11 @@ jobs:
             echo "artifact_registry=$GAR_IMAGE@$DIGEST"
             echo "commit=$GITHUB_SHA"
           } > "$RUNNER_TEMP/evidence/release.txt"
+
+      - name: Remove portable registry authentication
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/registry-auth"
 
       - name: Upload release evidence
         if: always()

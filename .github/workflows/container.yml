@@ -48,6 +48,45 @@ jobs:
 
           docker run --rm "$TRIVY_IMAGE" image --help | grep -F -- '--platform string'
 
+          portable_auth_step_count="$(grep -hF 'name: Create portable registry authentication' \
+            .github/workflows/release.yml \
+            .github/workflows/deploy.yml | wc -l)"
+          test "$portable_auth_step_count" -eq 2
+
+          portable_auth_action_count="$(grep -hF 'uses: ./.github/actions/portable-registry-auth' \
+            .github/workflows/release.yml \
+            .github/workflows/deploy.yml | wc -l)"
+          test "$portable_auth_action_count" -eq 2
+
+          portable_auth_mount_count="$(grep -hF '$RUNNER_TEMP/registry-auth:/root/.docker:ro' \
+            .github/workflows/release.yml \
+            .github/workflows/deploy.yml | wc -l)"
+          test "$portable_auth_mount_count" -eq 8
+
+          skopeo_authfile_count="$(grep -F -- '--authfile /root/.docker/config.json' \
+            .github/workflows/release.yml | wc -l)"
+          test "$skopeo_authfile_count" -eq 3
+
+          portable_auth_action=.github/actions/portable-registry-auth/action.yml
+          grep -F 'registry_auth_dir="$RUNNER_TEMP/registry-auth"' "$portable_auth_action"
+          grep -F 'access_token="$(gcloud auth print-access-token)"' "$portable_auth_action"
+          grep -F 'unset access_token' "$portable_auth_action"
+          grep -F '(.credsStore // "") == ""' "$portable_auth_action"
+          grep -F '((.credHelpers // {}) | length) == 0' "$portable_auth_action"
+
+          for workflow in .github/workflows/release.yml .github/workflows/deploy.yml; do
+            grep -F 'name: Remove portable registry authentication' "$workflow"
+
+            if grep -F '$HOME/.docker:/root/.docker:ro' "$workflow"; then
+              echo 'Production scanner containers must not depend on runner credential helpers.' >&2
+              exit 1
+            fi
+            if grep -F '/var/run/docker.sock' "$workflow"; then
+              echo 'Production scanner containers must not mount the host Docker socket.' >&2
+              exit 1
+            fi
+          done
+
       - name: Build the final runtime
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
