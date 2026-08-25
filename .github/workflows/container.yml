@@ -58,10 +58,18 @@ jobs:
             .github/workflows/deploy.yml | wc -l)"
           test "$portable_auth_action_count" -eq 2
 
-          portable_auth_mount_count="$(grep -hF '$RUNNER_TEMP/registry-auth:/root/.docker:ro' \
+          portable_auth_mount_count="$(grep -hF '$RUNNER_TEMP/registry-auth/.docker:/root/.docker:ro' \
             .github/workflows/release.yml \
             .github/workflows/deploy.yml | wc -l)"
           test "$portable_auth_mount_count" -eq 5
+
+          runner_temp_expression='$''{{ runner.temp }}/registry-auth'
+          attest_portable_home_count="$(grep -hF "HOME: $runner_temp_expression" \
+            .github/workflows/release.yml | wc -l)"
+          test "$attest_portable_home_count" -eq 1
+          grep -A3 -F \
+            'uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373' \
+            .github/workflows/release.yml | grep -F "HOME: $runner_temp_expression"
 
           buildx_setup_count="$(grep -F 'uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c' \
             .github/workflows/release.yml | wc -l)"
@@ -84,7 +92,12 @@ jobs:
           fi
 
           portable_auth_action=.github/actions/portable-registry-auth/action.yml
-          grep -F 'registry_auth_dir="$RUNNER_TEMP/registry-auth"' "$portable_auth_action"
+          grep -F 'registry_auth_home="$RUNNER_TEMP/registry-auth"' "$portable_auth_action"
+          grep -F 'docker_config_dir="$registry_auth_home/.docker"' "$portable_auth_action"
+          grep -F 'mkdir -p "$docker_config_dir"' "$portable_auth_action"
+          portable_config_reference_count="$(grep -F '"$docker_config_dir/config.json"' \
+            "$portable_auth_action" | wc -l)"
+          test "$portable_config_reference_count" -eq 2
           grep -F 'access_token="$(gcloud auth print-access-token)"' "$portable_auth_action"
           grep -F 'unset access_token' "$portable_auth_action"
           grep -F '(.credsStore // "") == ""' "$portable_auth_action"
