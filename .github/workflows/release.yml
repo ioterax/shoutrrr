@@ -97,6 +97,7 @@ jobs:
           build-args: |
             APP_VERSION=${{ needs.validate.outputs.version }}
             BUILD_DATE=${{ needs.validate.outputs.created }}
+            SECURITY_REFRESH=release-${{ needs.validate.outputs.version }}
             VCS_REF=${{ github.sha }}
           outputs: type=image,name=${{ env.CANDIDATE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=release-${{ matrix.slug }}
