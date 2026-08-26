@@ -29,9 +29,15 @@ RUN GOBIN=/usr/local/bin \
 FROM ${FRANKENPHP_RUNTIME_IMAGE} AS php-runtime
 
 USER root
+ARG SECURITY_REFRESH=unversioned
 COPY --from=frankenphp-builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
-RUN apk upgrade --no-cache \
-    && apk add --no-cache ffmpeg \
+RUN test -n "$SECURITY_REFRESH" \
+    && apk upgrade --no-cache \
+    && apk add --no-cache \
+      'libcrypto3>=3.5.8-r0' \
+      'libssl3>=3.5.8-r0' \
+      'openssl>=3.5.8-r0' \
+      ffmpeg \
     && install-php-extensions bcmath exif gd pcntl pdo_pgsql redis-6.3.0 \
     && rm -f /usr/local/bin/install-php-extensions \
     && frankenphp version \
