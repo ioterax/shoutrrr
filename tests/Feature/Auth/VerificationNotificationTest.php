@@ -2,6 +2,8 @@
 
 use App\Models\User;
 use Illuminate\Auth\Notifications\VerifyEmail;
+use Illuminate\Mail\Transport\ResendTransport;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
 use Laravel\Fortify\Features;
 
@@ -22,6 +24,17 @@ test('sends verification notification', function () {
         ->assertSessionHas('success');
 
     Notification::assertSentTo($user, VerifyEmail::class);
+});
+
+test('resend transport is available for production verification emails', function () {
+    config([
+        'services.resend.key' => 're_test_key',
+    ]);
+
+    Mail::purge('resend');
+
+    expect(Mail::mailer('resend')->getSymfonyTransport())
+        ->toBeInstanceOf(ResendTransport::class);
 });
 
 test('does not send verification notification if email is verified', function () {
