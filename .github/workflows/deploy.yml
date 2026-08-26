@@ -334,8 +334,10 @@ jobs:
           previous="$(gcloud run services describe shoutrrr \
             --project "$PROJECT_ID" --region "$REGION" \
             --format='value(status.latestReadyRevisionName)')"
+          test -n "$previous"
           secrets="$(<"$SECRETS_FILE")"
-          suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}"
+          suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          revision="shoutrrr-$suffix"
 
           gcloud run services update shoutrrr \
             --project "$PROJECT_ID" \
@@ -347,13 +349,30 @@ jobs:
             --no-traffic \
             --quiet
 
-          revision="$(gcloud run services describe shoutrrr \
+          gcloud run services update-traffic shoutrrr \
             --project "$PROJECT_ID" --region "$REGION" \
-            --format='value(status.latestCreatedRevisionName)')"
-          ready="$(gcloud run services describe shoutrrr \
-            --project "$PROJECT_ID" --region "$REGION" \
-            --format='value(status.latestReadyRevisionName)')"
-          test "$revision" = "$ready"
+            --to-revisions "$previous=100" --quiet
+
+          ready_status=""
+          for readiness_attempt in {1..36}; do
+            ready_status="$(
+              gcloud run revisions describe "$revision" \
+                --project "$PROJECT_ID" --region "$REGION" --format=json 2>/dev/null |
+                jq -r '.status.conditions[]? | select(.type == "Ready") | .status' || true
+            )"
+            if [[ "$ready_status" = "True" ]]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [[ "$ready_status" != "True" ]]; then
+            gcloud run revisions describe "$revision" \
+              --project "$PROJECT_ID" --region "$REGION" \
+              --format='yaml(status.conditions)'
+            exit 1
+          fi
+
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
 

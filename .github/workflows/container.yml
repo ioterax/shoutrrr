@@ -96,6 +96,17 @@ jobs:
             exit 1
           fi
 
+          grep -F 'suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"' \
+            .github/workflows/deploy.yml
+          grep -F 'gcloud run revisions describe "$revision"' \
+            .github/workflows/deploy.yml
+          grep -F -- '--to-revisions "$previous=100" --quiet' \
+            .github/workflows/deploy.yml
+          if grep -F 'test "$revision" = "$ready"' .github/workflows/deploy.yml; then
+            echo 'Cloud Run readiness must use bounded revision polling instead of an eventually consistent service comparison.' >&2
+            exit 1
+          fi
+
           if grep -F 'SKOPEO_IMAGE' .github/workflows/release.yml; then
             echo 'Release publication must not depend on an external Skopeo image.' >&2
             exit 1
