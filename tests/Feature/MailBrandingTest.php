@@ -19,3 +19,12 @@ test('markdown notification emails use the Shoutrrr brand', function () {
     expect($html)->not->toContain('laravel.com/img/notification-logo');
     expect($html)->not->toContain('Laravel Logo');
 });
+
+test('production deployment uses the approved iot.EraX sender identity', function () {
+    $deploymentWorkflow = file_get_contents(base_path('.github/workflows/deploy.yml'));
+
+    expect($deploymentWorkflow)
+        ->toContain('MAIL_MAILER: "resend"')
+        ->toContain('MAIL_FROM_ADDRESS: "security@ioterax.com"')
+        ->toContain('MAIL_FROM_NAME: "iot.EraX Security"');
+});
