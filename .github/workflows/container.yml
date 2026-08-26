@@ -86,6 +86,16 @@ jobs:
           grep -F 'test "$copied_digest" = "$DIGEST"' \
             .github/workflows/release.yml
 
+          grep -F \
+            '"DB_PASSWORD=projects/183905355867/secrets/shoutrrr-database-password:$DB_PASSWORD_VERSION"' \
+            .github/workflows/deploy.yml
+          if grep -F \
+            'DB_PASSWORD=projects/foundation-hub-504212/secrets/shoutrrr-database-password' \
+            .github/workflows/deploy.yml; then
+            echo 'Cross-project Cloud Run secret references must use the fd-hub numeric project identifier.' >&2
+            exit 1
+          fi
+
           if grep -F 'SKOPEO_IMAGE' .github/workflows/release.yml; then
             echo 'Release publication must not depend on an external Skopeo image.' >&2
             exit 1

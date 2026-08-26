@@ -236,7 +236,7 @@ jobs:
           secrets=(
             "APP_KEY=shoutrrr-app-key:$APP_KEY_VERSION"
             "PASSKEYS_USER_HANDLE_SECRET=shoutrrr-passkeys-user-handle-secret:$PASSKEY_VERSION"
-            "DB_PASSWORD=projects/foundation-hub-504212/secrets/shoutrrr-database-password:$DB_PASSWORD_VERSION"
+            "DB_PASSWORD=projects/183905355867/secrets/shoutrrr-database-password:$DB_PASSWORD_VERSION"
             "REDIS_HOST=redis-host:$REDIS_HOST_VERSION"
             "REDIS_PASSWORD=redis-password:$REDIS_PASSWORD_VERSION"
             "/var/www/html/storage/secrets/redis-ca.crt=redis-tls-ca-certificate:$REDIS_TLS_CA_VERSION"
