@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Media;
 
 use Illuminate\Support\Facades\Image;
+use Illuminate\Image\Image as PendingImage;
 use Throwable;
 
 /**
@@ -75,20 +76,16 @@ class ImageCompressor
         $longestEdge = max(1, $info[0], $info[1]);
 
         while (true) {
-            // Walk quality down from the ceiling and take the first (highest) encoding that
-            // fits, so we preserve as much quality as the byte budget allows before resorting
-            // to downscaling. The immutable pipeline re-encodes from the source bytes each
-            // pass; publishing runs in a queued job and the iteration count is bounded.
-            for ($quality = self::QUALITY_CEIL; $quality >= self::QUALITY_FLOOR; $quality -= self::QUALITY_STEP) {
-                $encoded = $this->encode($bytes, max(1, $longestEdge), $preferWebp, $quality, $outMime);
+            $image = Image::fromBytes($bytes)->scale(max(1, $longestEdge), max(1, $longestEdge));
 
-                if ($encoded === null) {
-                    return CompressionResult::untouched($bytes, $mime);
-                }
+            $encoded = $this->highestQualityThatFits($image, $maxBytes, $preferWebp, $outMime);
 
-                if (strlen($encoded) <= $maxBytes) {
-                    return CompressionResult::compressed($encoded, $outMime);
-                }
+            if ($encoded === false) {
+                return CompressionResult::untouched($bytes, $mime);
+            }
+
+            if (is_string($encoded)) {
+                return CompressionResult::compressed($encoded, $outMime);
             }
 
             $longestEdge = (int) floor($longestEdge * self::DOWNSCALE_FACTOR);
@@ -100,21 +97,70 @@ class ImageCompressor
     }
 
     /**
-     * Encode the source bytes at the given longest edge and quality, preferring WebP where
+     * Try maximum quality first, then find the highest fitting quality with a bounded binary
+     * search. Image byte size increases with encoder quality, so the common case still takes
+     * one encode and an oversized result takes at most five instead of walking all eight levels.
+     *
+     * @return string|false|null Encoded bytes, false when encoding failed, or null when the
+     *                           image needs another downscale pass.
+     */
+    private function highestQualityThatFits(PendingImage $image, int $maxBytes, bool $preferWebp, ?string &$outMime): string|false|null
+    {
+        $qualities = range(self::QUALITY_FLOOR, self::QUALITY_CEIL, self::QUALITY_STEP);
+        array_pop($qualities);
+        $maximumMime = null;
+        $maximumEncoded = $this->encode($image, $preferWebp, self::QUALITY_CEIL, $maximumMime);
+
+        if ($maximumEncoded === null) {
+            return false;
+        }
+
+        if (strlen($maximumEncoded) <= $maxBytes) {
+            $outMime = $maximumMime;
+
+            return $maximumEncoded;
+        }
+
+        $lowest = 0;
+        $highest = count($qualities) - 1;
+        $candidate = null;
+
+        while ($lowest <= $highest) {
+            $middle = intdiv($lowest + $highest, 2);
+            $candidateMime = null;
+            $encoded = $this->encode($image, $preferWebp, $qualities[$middle], $candidateMime);
+
+            if ($encoded === null) {
+                return false;
+            }
+
+            if (strlen($encoded) <= $maxBytes) {
+                $candidate = $encoded;
+                $outMime = $candidateMime;
+                $lowest = $middle + 1;
+            } else {
+                $highest = $middle - 1;
+            }
+        }
+
+        return $candidate;
+    }
+
+    /**
+     * Encode the pending image pipeline at the given quality, preferring WebP where
      * the platform accepts it and falling back to JPEG when the active driver cannot encode
      * WebP (so a GD build without WebP, or the Imagick driver, still degrades to a valid
      * accepted format rather than shipping the uncompressed original).
      *
-     * @param  int<1, max>  $edge  Longest-edge cap passed to scale() (never upsizes).
      * @param  int<1, 100>  $quality  Encoder quality.
      * @param  string  $outMime  Set by reference to the mime of the format actually encoded.
      * @return string|null The encoded bytes, or null if neither format could be encoded.
      */
-    private function encode(string $bytes, int $edge, bool $preferWebp, int $quality, ?string &$outMime = null): ?string
+    private function encode(PendingImage $image, bool $preferWebp, int $quality, ?string &$outMime = null): ?string
     {
         if ($preferWebp) {
             try {
-                $encoded = (string) Image::fromBytes($bytes)->scale($edge, $edge)->toWebp()->quality($quality)->toBytes();
+                $encoded = (string) $image->toWebp()->quality($quality)->toBytes();
                 $outMime = 'image/webp';
 
                 return $encoded;
@@ -124,7 +170,7 @@ class ImageCompressor
         }
 
         try {
-            $encoded = (string) Image::fromBytes($bytes)->scale($edge, $edge)->toJpg()->quality($quality)->toBytes();
+            $encoded = (string) $image->toJpg()->quality($quality)->toBytes();
             $outMime = 'image/jpeg';
 
             return $encoded;

@@ -48,6 +48,8 @@ RUN test -n "$SECURITY_REFRESH" \
     && php -m | grep -Fx pdo_pgsql \
     && php -m | grep -Fx redis
 
+COPY --chmod=644 docker/php-production.ini /usr/local/etc/php/conf.d/zz-shoutrrr-production.ini
+
 # Composer is copied from an immutable Composer 2.10.2 manifest. It never
 # enters the final image.
 FROM ${COMPOSER_IMAGE} AS composer-bin
@@ -146,6 +148,7 @@ COPY --chown=www-data:www-data storage ./storage
 COPY --from=vendor --chown=www-data:www-data /var/www/html/vendor ./vendor
 COPY --from=assets --chown=www-data:www-data /app/public/build ./public/build
 COPY --from=assets --chown=www-data:www-data /app/public/emoji ./public/emoji
+COPY --chmod=755 docker/app-command.sh /usr/local/bin/app-command.sh
 
 RUN mkdir -p \
       bootstrap/cache \
@@ -173,4 +176,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/up || exit 1
 
-CMD ["php", "artisan", "octane:start", "--server=frankenphp", "--host=0.0.0.0", "--port=8080"]
+CMD ["/usr/local/bin/app-command.sh"]
