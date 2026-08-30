@@ -30,6 +30,7 @@ env:
   PROJECT_ID: ioterax-prd
   REGION: europe-west1
   GAR_IMAGE: europe-west1-docker.pkg.dev/ioterax-prd/ioterax-images/shoutrrr
+  MEDIA_BUCKET: ioterax-prd-shoutrrr-media
   WIF_PROVIDER: projects/913330680454/locations/global/workloadIdentityPools/github-actions-pool/providers/shoutrrr
   WIF_SERVICE_ACCOUNT: github-shoutrrr-deployer@ioterax-prd.iam.gserviceaccount.com
   TRIVY_IMAGE: aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 # 0.74.0
@@ -99,6 +100,7 @@ jobs:
           }
 
           test -n "$DB_HOST"
+          test "$MEDIA_BUCKET" = "ioterax-prd-shoutrrr-media"
           for version in \
             "$APP_KEY_VERSION" \
             "$PASSKEY_VERSION" \
@@ -291,6 +293,7 @@ jobs:
             --region "$REGION" \
             --image "$IMAGE" \
             --env-vars-file "$RUNTIME_FILE" \
+            --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33" \
             --set-secrets "$secrets" \
             --quiet
           gcloud run jobs execute shoutrrr-migrate \
@@ -323,6 +326,7 @@ jobs:
               --region "$REGION" \
               --image "$IMAGE" \
               --env-vars-file "$RUNTIME_FILE" \
+              --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33" \
               --set-secrets "$secrets" \
               --quiet
           done
@@ -349,6 +353,7 @@ jobs:
             --region "$REGION" \
             --image "$IMAGE" \
             --env-vars-file "$RUNTIME_FILE" \
+            --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33" \
             --set-secrets "$secrets" \
             --revision-suffix "$suffix" \
             --no-traffic \

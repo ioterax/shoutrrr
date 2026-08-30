@@ -36,3 +36,15 @@ test('the production deployment pins the reviewed runtime budgets', function () 
         ->toContain('PHP_POST_MAX_SIZE: "20M"')
         ->toContain('PHP_UPLOAD_MAX_FILE_SIZE: "8M"');
 });
+
+test('the production deployment preserves writable media volume ownership', function () {
+    $workflow = file_get_contents(base_path('.github/workflows/deploy.yml'));
+
+    expect($workflow)
+        ->toContain('MEDIA_BUCKET: ioterax-prd-shoutrrr-media')
+        ->toContain('test "$MEDIA_BUCKET" = "ioterax-prd-shoutrrr-media"')
+        ->and(substr_count(
+            $workflow,
+            '--add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33"',
+        ))->toBe(3);
+});
