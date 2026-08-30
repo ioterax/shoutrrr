@@ -1,5 +1,6 @@
 <?php
 
+use App\Exceptions\MediaStorageException;
 use App\Enums\Platform;
 use App\Enums\WorkspaceRole;
 use App\Models\ConnectedAccount;
@@ -7,8 +8,11 @@ use App\Models\Post;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceMembership;
+use App\Services\Posts\MediaStorageService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+
+use function Pest\Laravel\mock;
 
 function memberWithDraft(): array
 {
@@ -35,6 +39,22 @@ test('POST /posts/{post}/media uploads and returns the media descriptor', functi
     ], ['Accept' => 'application/json'])->assertCreated()
         ->assertJsonPath('media.mime', 'image/jpeg')
         ->assertJsonPath('media.kind', 'image');
+});
+
+test('POST /posts/{post}/media returns a controlled service unavailable response when storage fails', function () {
+    Storage::fake('public');
+    [$user, $workspace, $post] = memberWithDraft();
+
+    mock(MediaStorageService::class)
+        ->shouldReceive('store')
+        ->once()
+        ->andThrow(MediaStorageException::writeFailed('public', 'uploaded-file'));
+
+    test()->post("/posts/{$post['id']}/media", [
+        'file' => UploadedFile::fake()->image('p.jpg', 800, 600)->size(300),
+    ], ['Accept' => 'application/json'])
+        ->assertServiceUnavailable()
+        ->assertJsonPath('message', 'The image storage is temporarily unavailable. Please try again.');
 });
 
 test('it rejects a non-image upload', function () {

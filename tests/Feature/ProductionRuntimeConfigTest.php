@@ -45,6 +45,6 @@ test('the production deployment preserves writable media volume ownership', func
         ->toContain('test "$MEDIA_BUCKET" = "ioterax-prd-shoutrrr-media"')
         ->and(substr_count(
             $workflow,
-            '--add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33"',
+            '--add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=82;gid=82"',
         ))->toBe(3);
 });
