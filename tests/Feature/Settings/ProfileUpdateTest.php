@@ -92,6 +92,34 @@ test('profile photo uses the configured public image disk', function () {
     Storage::disk('s3')->assertMissing($user->avatar_path);
 });
 
+test('profile photo can be replaced and removes the previous file', function () {
+    config([
+        'filesystems.default' => 'public',
+        'filesystems.public_images' => null,
+    ]);
+    Storage::fake('public');
+
+    $user = User::factory()->create();
+    $oldPath = 'profile-photos/old-avatar.jpg';
+    Storage::disk('public')->put($oldPath, 'old-avatar');
+    $user->forceFill(['avatar_path' => $oldPath])->save();
+
+    $this->actingAs($user)
+        ->patch(route('profile.update'), [
+            'name' => $user->name,
+            'email' => $user->email,
+            'photo' => UploadedFile::fake()->image('new-avatar.jpg'),
+        ])
+        ->assertSessionHasNoErrors()
+        ->assertRedirect(route('profile.edit'));
+
+    $newPath = $user->refresh()->avatar_path;
+
+    expect($newPath)->not->toBeNull()->not->toBe($oldPath);
+    Storage::disk('public')->assertExists($newPath);
+    Storage::disk('public')->assertMissing($oldPath);
+});
+
 test('profile photo must be an image', function () {
     Storage::fake('public');
 
