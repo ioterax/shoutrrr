@@ -1,5 +1,7 @@
 <?php
 
+use App\Exceptions\MediaStorageException;
+use App\Models\PostMedia;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\Posts\MediaStorageService;
@@ -27,6 +29,20 @@ test('it stores an uploaded image as workspace-scoped orphan media', function ()
         ->and($media->width)->toBe(1200);
 
     Storage::disk('s3')->assertExists($media->path);
+});
+
+test('it rejects a failed filesystem write without persisting an invalid media row', function () {
+    $workspace = Workspace::factory()->create();
+    $file = Mockery::mock(UploadedFile::class);
+    $file->shouldReceive('store')
+        ->once()
+        ->with('media/'.$workspace->id, 'public')
+        ->andReturn(false);
+
+    expect(fn () => app(MediaStorageService::class)->store($workspace->id, $file))
+        ->toThrow(MediaStorageException::class);
+
+    expect(PostMedia::query()->where('workspace_id', $workspace->id)->count())->toBe(0);
 });
 
 test('storeBeautified persists composed + source files and settings', function () {

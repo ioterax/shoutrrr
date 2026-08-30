@@ -293,7 +293,7 @@ jobs:
             --region "$REGION" \
             --image "$IMAGE" \
             --env-vars-file "$RUNTIME_FILE" \
-            --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33" \
+            --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=82;gid=82" \
             --set-secrets "$secrets" \
             --quiet
           gcloud run jobs execute shoutrrr-migrate \
@@ -326,7 +326,7 @@ jobs:
               --region "$REGION" \
               --image "$IMAGE" \
               --env-vars-file "$RUNTIME_FILE" \
-              --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33" \
+              --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=82;gid=82" \
               --set-secrets "$secrets" \
               --quiet
           done
@@ -353,7 +353,7 @@ jobs:
             --region "$REGION" \
             --image "$IMAGE" \
             --env-vars-file "$RUNTIME_FILE" \
-            --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=33;gid=33" \
+            --add-volume "name=media,type=cloud-storage,bucket=$MEDIA_BUCKET,mount-options=uid=82;gid=82" \
             --set-secrets "$secrets" \
             --revision-suffix "$suffix" \
             --no-traffic \
