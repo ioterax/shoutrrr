@@ -6,8 +6,10 @@ use Illuminate\Support\Facades\File;
 
 beforeEach(function (): void {
     $this->manifestDirectory = storage_path('framework/testing/manifest-'.bin2hex(random_bytes(8)));
-    File::ensureDirectoryExists($this->manifestDirectory.'/migrations');
-    File::ensureDirectoryExists($this->manifestDirectory.'/schema');
+    $this->migrationDirectory = $this->manifestDirectory.'/migrations';
+    $this->schemaDirectory = $this->manifestDirectory.'/schema';
+    File::ensureDirectoryExists($this->migrationDirectory);
+    File::ensureDirectoryExists($this->schemaDirectory);
     $this->originalDatabasePath = database_path();
     $this->app->useDatabasePath($this->manifestDirectory);
     File::put($this->manifestDirectory.'/migrations/2026_01_01_000000_example.php', '<?php throw new Exception("Never execute migrations while hashing");');
@@ -58,15 +60,15 @@ it('rejects files outside the image application directory', function (): void {
 });
 
 it('rejects an empty migration set', function (): void {
-    File::deleteDirectory($this->manifestDirectory.'/migrations');
-    File::ensureDirectoryExists($this->manifestDirectory.'/migrations');
+    File::deleteDirectory($this->migrationDirectory);
+    File::ensureDirectoryExists($this->migrationDirectory);
 
     expect(fn () => app(MigrationManifest::class)->hash())->toThrow(RuntimeException::class, 'No migrations found');
 });
 
 it('rejects schema directories escaping the image or pointing at missing inputs', function (string $target): void {
-    File::deleteDirectory($this->manifestDirectory.'/schema');
-    symlink($target, $this->manifestDirectory.'/schema');
+    File::deleteDirectory($this->schemaDirectory);
+    symlink($target, $this->schemaDirectory);
 
     expect(fn () => app(MigrationManifest::class)->hash())->toThrow(RuntimeException::class);
 })->with(['/tmp', '/nonexistent-shoutrrr-schema']);

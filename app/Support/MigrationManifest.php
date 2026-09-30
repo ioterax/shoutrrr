@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use Illuminate\Database\Migrations\Migrator;
-use RuntimeException;
+use UnexpectedValueException;
 
 class MigrationManifest
 {
@@ -28,7 +28,7 @@ class MigrationManifest
             $migrations = str_ends_with($path, '.php') ? [$path] : glob($path.'/*_*.php');
 
             if ($migrations === false) {
-                throw new RuntimeException('Cannot enumerate migration files.');
+                throw new UnexpectedValueException('Cannot enumerate migration files.');
             }
 
             foreach ($migrations as $migration) {
@@ -36,7 +36,7 @@ class MigrationManifest
                 $name = $this->migrator->getMigrationName($migration);
 
                 if (isset($names[$name]) && $names[$name] !== $relative) {
-                    throw new RuntimeException('Duplicate migration name: '.$name);
+                    throw new UnexpectedValueException('Duplicate migration name: '.$name);
                 }
 
                 $names[$name] = $relative;
@@ -49,7 +49,7 @@ class MigrationManifest
         }
 
         if ($names === []) {
-            throw new RuntimeException('No migrations found; web-only release is blocked.');
+            throw new UnexpectedValueException('No migrations found; web-only release is blocked.');
         }
 
         ksort($files, SORT_STRING);
@@ -70,7 +70,7 @@ class MigrationManifest
         $files = glob($path.'/*.sql');
 
         if (! is_dir($path) || $files === false) {
-            throw new RuntimeException('Cannot enumerate schema dumps.');
+            throw new UnexpectedValueException('Cannot enumerate schema dumps.');
         }
 
         return $files;
@@ -82,7 +82,7 @@ class MigrationManifest
         $root = realpath(base_path()).DIRECTORY_SEPARATOR;
 
         if ($resolved === false || ! is_readable($resolved) || ! str_starts_with($resolved, $root)) {
-            throw new RuntimeException('Migration input must be readable inside the application image.');
+            throw new UnexpectedValueException('Migration input must be readable inside the application image.');
         }
 
         return substr($resolved, strlen($root));
@@ -93,7 +93,7 @@ class MigrationManifest
         $hash = hash_file('sha256', $path);
 
         if ($hash === false) {
-            throw new RuntimeException('Cannot hash migration input.');
+            throw new UnexpectedValueException('Cannot hash migration input.');
         }
 
         return $hash;

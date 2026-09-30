@@ -29,10 +29,8 @@ class AssertWebRelease extends Command
             return self::FAILURE;
         }
 
-        if ($this->call('migrate:status', ['--pending' => '1']) !== self::SUCCESS) {
-            return self::FAILURE;
-        }
-
-        return $this->call('production:assert-no-demo-users');
+        return $this->call('migrate:status', ['--pending' => '1']) === self::SUCCESS
+            ? $this->call('production:assert-no-demo-users')
+            : self::FAILURE;
     }
 }

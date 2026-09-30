@@ -61,7 +61,7 @@ case "$*" in
   *production:assert-web-release*) exit "$GATE_EXIT" ;;
 esac
 SH);
-    chmod($directory.'/php', 0755);
+    chmod($directory.'/php', 0700);
 
     try {
         $process = new Process(['sh', base_path('docker/app-command.sh')], base_path(), [
