@@ -37,6 +37,21 @@ test('the production deployment pins the reviewed runtime budgets', function () 
         ->toContain('PHP_UPLOAD_MAX_FILE_SIZE: "8M"');
 });
 
+test('the production deployment bounds Redis waits while preserving TLS and stores', function () {
+    $workflow = file_get_contents(base_path('.github/workflows/deploy.yml'));
+
+    expect($workflow)
+        ->toContain('REDIS_TIMEOUT: "1"')
+        ->toContain('REDIS_READ_TIMEOUT: "1"')
+        ->toContain('REDIS_MAX_RETRIES: "0"')
+        ->toContain('REDIS_SCHEME: "tls"')
+        ->toContain('REDIS_TLS_VERIFY_PEER: "true"')
+        ->toContain('REDIS_TLS_VERIFY_PEER_NAME: "true"')
+        ->toContain('CACHE_STORE: "redis"')
+        ->toContain('SESSION_DRIVER: "redis"')
+        ->toContain('QUEUE_CONNECTION: "redis"');
+});
+
 test('the production deployment preserves writable media volume ownership', function () {
     $workflow = file_get_contents(base_path('.github/workflows/deploy.yml'));
 

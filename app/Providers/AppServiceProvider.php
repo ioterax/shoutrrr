@@ -12,11 +12,13 @@ use App\Models\Workspace;
 use App\Services\Auth\Socialite\ThreadsProvider;
 use App\Services\Media\ImageCompressor;
 use App\Services\Media\ImageToJpegConverter;
+use App\Support\PhpRedisConnector;
 use Carbon\CarbonImmutable;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Middleware\TrustProxies;
+use Illuminate\Redis\RedisManager;
 use Illuminate\Routing\Middleware\ValidateSignature;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Date;
@@ -34,6 +36,7 @@ use Laravel\Passport\Events\AccessTokenCreated;
 use Laravel\Passport\Passport;
 use Laravel\Socialite\Facades\Socialite;
 use Override;
+use RedisException;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
@@ -53,6 +56,10 @@ class AppServiceProvider extends ServiceProvider
         $this->app->when([ImageCompressor::class, ImageToJpegConverter::class])
             ->needs('$maxPixels')
             ->give(fn (): int => (int) config('media.max_image_pixels', ImageCompressor::DEFAULT_MAX_PIXELS));
+
+        $this->callAfterResolving('redis', function (RedisManager $redis): void {
+            $redis->extend('phpredis', fn (): PhpRedisConnector => new PhpRedisConnector);
+        });
     }
 
     /**
@@ -203,6 +210,10 @@ class AppServiceProvider extends ServiceProvider
     protected function configureErrorPages(): void
     {
         Inertia::handleExceptionsUsing(function (ExceptionResponse $response): ?ExceptionResponse {
+            if ($response->exception instanceof RedisException) {
+                return null;
+            }
+
             if ($response->request->is('api/*') || $response->request->expectsJson()) {
                 return null;
             }
