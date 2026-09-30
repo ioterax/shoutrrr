@@ -22,9 +22,12 @@ RUN GOBIN=/usr/local/bin \
     ../../go.sh install \
       -ldflags "-w -s -X 'github.com/caddyserver/caddy/v2.CustomVersion=FrankenPHP v1.12.7 PHP ${PHP_VERSION} Caddy' -X 'github.com/caddyserver/caddy/v2.CustomBinaryName=frankenphp' -X 'github.com/caddyserver/caddy/v2/modules/caddyhttp.ServerHeader=FrankenPHP Caddy'" \
       -buildvcs=false \
-    && go version -m /usr/local/bin/frankenphp | grep -E 'github.com/getkin/kin-openapi[[:space:]]+v0\.144\.0([[:space:]]|$)' \
-    && go version -m /usr/local/bin/frankenphp | grep -E 'golang.org/x/crypto[[:space:]]+v0\.55\.0([[:space:]]|$)' \
-    && go version -m /usr/local/bin/frankenphp | grep -E 'google.golang.org/grpc[[:space:]]+v1\.83\.2([[:space:]]|$)'
+    && go version -m /usr/local/bin/frankenphp \
+      | grep -E 'github.com/getkin/kin-openapi[[:space:]]+v0\.144\.0([[:space:]]|$)' \
+    && go version -m /usr/local/bin/frankenphp \
+      | grep -E 'golang.org/x/crypto[[:space:]]+v0\.55\.0([[:space:]]|$)' \
+    && go version -m /usr/local/bin/frankenphp \
+      | grep -E 'google.golang.org/grpc[[:space:]]+v1\.83\.2([[:space:]]|$)'
 
 # Build the common production PHP runtime once. Build dependencies installed by
 # install-php-extensions are removed by that tool before this stage is copied.
