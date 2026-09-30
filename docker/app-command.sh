@@ -57,6 +57,15 @@ php \
     -d "upload_max_filesize=${PHP_UPLOAD_MAX_FILE_SIZE_VALUE}" \
     artisan optimize --no-ansi --no-interaction
 
+if [ "${WEB_ONLY_RELEASE:-false}" = "true" ]; then
+    php -d "memory_limit=${PHP_MEMORY_LIMIT_VALUE}" \
+        artisan production:assert-web-release "${WEB_RELEASE_MIGRATION_HASH:?Missing web release migration manifest}" \
+        --no-ansi --no-interaction
+elif [ "${WEB_ONLY_RELEASE:-false}" != "false" ]; then
+    echo '[runtime] WEB_ONLY_RELEASE must be true or false' >&2
+    exit 64
+fi
+
 exec php \
     -d "memory_limit=${PHP_MEMORY_LIMIT_VALUE}" \
     -d "post_max_size=${PHP_POST_MAX_SIZE_VALUE}" \

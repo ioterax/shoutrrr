@@ -18,6 +18,7 @@ use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Sentry\Laravel\Integration;
+use Symfony\Component\HttpFoundation\Response;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -76,6 +77,20 @@ return Application::configure(basePath: dirname(__DIR__))
         // Report unhandled exceptions to Sentry. No-op unless a DSN is set, so
         // self-hosted instances without Sentry are unaffected.
         Integration::handles($exceptions);
+
+        $exceptions->render(function (RedisException $exception, Request $request): Response {
+            $headers = ['Cache-Control' => 'no-store, private', 'Retry-After' => '60'];
+            $message = 'Service temporarily unavailable. Please try again later.';
+
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json(['message' => $message], 503, $headers);
+            }
+
+            return response($message, 503, [
+                ...$headers,
+                'Content-Type' => 'text/plain; charset=UTF-8',
+            ]);
+        });
 
         // Render exceptions as JSON for API paths and for any client that
         // explicitly asks for JSON (e.g. the composer's useHttp XHR autosave).

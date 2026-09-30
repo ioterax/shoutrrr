@@ -2,6 +2,8 @@
 
 use Laravel\Octane\Listeners\CollectGarbage;
 
+const PRODUCTION_RUNTIME_WORKFLOW_PATH = '.github/workflows/deploy.yml';
+
 test('production PHP limits accept the complete image editor payload', function () {
     $configuration = parse_ini_file(base_path('docker/php-production.ini'));
 
@@ -27,7 +29,7 @@ test('the web container warms Laravel and bounds long-lived Octane workers', fun
 });
 
 test('the production deployment pins the reviewed runtime budgets', function () {
-    $workflow = file_get_contents(base_path('.github/workflows/deploy.yml'));
+    $workflow = file_get_contents(base_path(PRODUCTION_RUNTIME_WORKFLOW_PATH));
 
     expect($workflow)
         ->toContain('OCTANE_WORKERS: "2"')
@@ -37,8 +39,26 @@ test('the production deployment pins the reviewed runtime budgets', function () 
         ->toContain('PHP_UPLOAD_MAX_FILE_SIZE: "8M"');
 });
 
+test('the production deployment bounds Redis waits while preserving TLS and stores', function () {
+    $workflow = file_get_contents(base_path(PRODUCTION_RUNTIME_WORKFLOW_PATH));
+
+    foreach ([
+        'REDIS_TIMEOUT' => '1',
+        'REDIS_READ_TIMEOUT' => '1',
+        'REDIS_MAX_RETRIES' => '0',
+        'REDIS_SCHEME' => 'tls',
+        'REDIS_TLS_VERIFY_PEER' => 'true',
+        'REDIS_TLS_VERIFY_PEER_NAME' => 'true',
+        'CACHE_STORE' => 'redis',
+        'SESSION_DRIVER' => 'redis',
+        'QUEUE_CONNECTION' => 'redis',
+    ] as $setting => $value) {
+        expect($workflow)->toContain("{$setting}: \"{$value}\"");
+    }
+});
+
 test('the production deployment preserves writable media volume ownership', function () {
-    $workflow = file_get_contents(base_path('.github/workflows/deploy.yml'));
+    $workflow = file_get_contents(base_path(PRODUCTION_RUNTIME_WORKFLOW_PATH));
 
     expect($workflow)
         ->toContain('MEDIA_BUCKET: ioterax-prd-shoutrrr-media')

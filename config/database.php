@@ -3,12 +3,30 @@
 use Illuminate\Support\Str;
 use Pdo\Mysql;
 
+$loopbackHost = '127.0.0.1';
+
 $redisTlsContext = [
     'stream' => array_filter([
         'cafile' => env('REDIS_TLS_CA_PATH'),
         'verify_peer' => env('REDIS_TLS_VERIFY_PEER', true),
         'verify_peer_name' => env('REDIS_TLS_VERIFY_PEER_NAME', true),
     ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+];
+
+$redisConnection = [
+    'scheme' => env('REDIS_SCHEME', 'tcp'),
+    'url' => env('REDIS_URL'),
+    'host' => env('REDIS_HOST', $loopbackHost),
+    'username' => env('REDIS_USERNAME'),
+    'password' => env('REDIS_PASSWORD'),
+    'port' => env('REDIS_PORT', '6379'),
+    'timeout' => (float) env('REDIS_TIMEOUT', 1),
+    'read_timeout' => (float) env('REDIS_READ_TIMEOUT', 1),
+    'max_retries' => env('REDIS_MAX_RETRIES', 3),
+    'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
+    'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
+    'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+    'context' => $redisTlsContext,
 ];
 
 return [
@@ -55,7 +73,7 @@ return [
         'mysql' => [
             'driver' => 'mysql',
             'url' => env('DB_URL'),
-            'host' => env('DB_HOST', '127.0.0.1'),
+            'host' => env('DB_HOST', $loopbackHost),
             'port' => env('DB_PORT', '3306'),
             'database' => env('DB_DATABASE', 'laravel'),
             'username' => env('DB_USERNAME', 'root'),
@@ -75,7 +93,7 @@ return [
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),
-            'host' => env('DB_HOST', '127.0.0.1'),
+            'host' => env('DB_HOST', $loopbackHost),
             'port' => env('DB_PORT', '3306'),
             'database' => env('DB_DATABASE', 'laravel'),
             'username' => env('DB_USERNAME', 'root'),
@@ -95,7 +113,7 @@ return [
         'pgsql' => [
             'driver' => 'pgsql',
             'url' => env('DB_URL'),
-            'host' => env('DB_HOST', '127.0.0.1'),
+            'host' => env('DB_HOST', $loopbackHost),
             'port' => env('DB_PORT', '5432'),
             'database' => env('DB_DATABASE', 'laravel'),
             'username' => env('DB_USERNAME', 'root'),
@@ -162,33 +180,13 @@ return [
         ],
 
         'default' => [
-            'scheme' => env('REDIS_SCHEME', 'tcp'),
-            'url' => env('REDIS_URL'),
-            'host' => env('REDIS_HOST', '127.0.0.1'),
-            'username' => env('REDIS_USERNAME'),
-            'password' => env('REDIS_PASSWORD'),
-            'port' => env('REDIS_PORT', '6379'),
+            ...$redisConnection,
             'database' => env('REDIS_DB', '0'),
-            'max_retries' => env('REDIS_MAX_RETRIES', 3),
-            'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
-            'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
-            'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
-            'context' => $redisTlsContext,
         ],
 
         'cache' => [
-            'scheme' => env('REDIS_SCHEME', 'tcp'),
-            'url' => env('REDIS_URL'),
-            'host' => env('REDIS_HOST', '127.0.0.1'),
-            'username' => env('REDIS_USERNAME'),
-            'password' => env('REDIS_PASSWORD'),
-            'port' => env('REDIS_PORT', '6379'),
+            ...$redisConnection,
             'database' => env('REDIS_CACHE_DB', '1'),
-            'max_retries' => env('REDIS_MAX_RETRIES', 3),
-            'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
-            'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
-            'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
-            'context' => $redisTlsContext,
         ],
 
     ],
