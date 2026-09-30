@@ -16,6 +16,11 @@ on:
         required: true
         default: false
         type: boolean
+      web_only:
+        description: Publish only the web service with read-only startup checks; required during background suspension
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -88,6 +93,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           DIGEST: ${{ inputs.image_digest }}
+          WEB_ONLY: ${{ inputs.web_only }}
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "ioterax/shoutrrr"
@@ -131,10 +137,12 @@ jobs:
             --project "$PROJECT_ID" >/dev/null
           gcloud run services describe shoutrrr \
             --project "$PROJECT_ID" --region "$REGION" >/dev/null
-          for job in shoutrrr-migrate shoutrrr-scheduler shoutrrr-queue-worker; do
-            gcloud run jobs describe "$job" \
-              --project "$PROJECT_ID" --region "$REGION" >/dev/null
-          done
+          if [[ "$WEB_ONLY" != "true" ]]; then
+            for job in shoutrrr-migrate shoutrrr-scheduler shoutrrr-queue-worker; do
+              gcloud run jobs describe "$job" \
+                --project "$PROJECT_ID" --region "$REGION" >/dev/null
+            done
+          fi
 
       - name: Re-scan immutable deployment input
         shell: bash
@@ -181,11 +189,73 @@ jobs:
             --certificate-oidc-issuer "$issuer" \
             "$target" >/dev/null
 
+      - name: Capture the serving revision and immutable image
+        id: baseline
+        shell: bash
+        env:
+          WEB_ONLY: ${{ inputs.web_only }}
+        run: |
+          set -euo pipefail
+          gcloud run services describe shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format='json(status.traffic,spec.template.spec.containers[].name,spec.template.spec.containers[].command,spec.template.spec.containers[].args)' \
+            > "$RUNNER_TEMP/deploy-evidence/traffic-before.json"
+          if [[ "$WEB_ONLY" = "true" ]]; then
+            jq -e -f .github/web-startup.jq "$RUNNER_TEMP/deploy-evidence/traffic-before.json"
+          fi
+          previous="$(jq -er -f .github/serving-revision.jq "$RUNNER_TEMP/deploy-evidence/traffic-before.json")"
+          image="$(gcloud run revisions describe "$previous" \
+            --project "$PROJECT_ID" --region "$REGION" --format='value(status.imageDigest)')"
+          [[ "$image" == "$GAR_IMAGE@"* ]]
+          digest="${image#"$GAR_IMAGE@"}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "previous=$previous"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify web-only migration compatibility in immutable images
+        if: inputs.web_only
+        id: migrations
+        shell: bash
+        env:
+          DIGEST: ${{ inputs.image_digest }}
+          VERSION: ${{ inputs.version }}
+          PREVIOUS_IMAGE: ${{ steps.baseline.outputs.image }}
+        run: |
+          set -euo pipefail
+          candidate="$GAR_IMAGE@$DIGEST"
+          docker pull "$candidate"
+          test "$(docker image inspect "$candidate" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$candidate" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')" = "$VERSION"
+          docker image inspect "$candidate" --format '{{json .Config}}' |
+            jq -e '.Cmd == ["/usr/local/bin/app-command.sh"] and .Entrypoint == ["docker-php-entrypoint"]'
+
+          extract_manifest() {
+            docker run --rm --network none --entrypoint php \
+              --cap-drop ALL --security-opt no-new-privileges \
+              -e APP_ENV=production -e APP_DEBUG=false \
+              -e CACHE_STORE=array -e SESSION_DRIVER=array -e QUEUE_CONNECTION=sync \
+              -e LOG_CHANNEL=stderr -e DB_CONNECTION=pgsql -e PASSPORT_AUTO_GENERATE_KEYS=false \
+              -v "$GITHUB_WORKSPACE/docker/migration-manifest.php:/tmp/migration-manifest.php:ro" \
+              -v "$GITHUB_WORKSPACE/app/Support/MigrationManifest.php:/tmp/MigrationManifest.php:ro" \
+              "$1" /tmp/migration-manifest.php
+          }
+
+          extract_manifest "$PREVIOUS_IMAGE" > "$RUNNER_TEMP/deploy-evidence/migrations-before.json"
+          extract_manifest "$candidate" > "$RUNNER_TEMP/deploy-evidence/migrations-candidate.json"
+          cmp "$RUNNER_TEMP/deploy-evidence/migrations-before.json" "$RUNNER_TEMP/deploy-evidence/migrations-candidate.json"
+          manifest="$(jq -er '.hash' "$RUNNER_TEMP/deploy-evidence/migrations-candidate.json")"
+          [[ "$manifest" =~ ^[0-9a-f]{64}$ ]]
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
       - name: Prepare reviewed runtime configuration
         id: config
         shell: bash
         env:
           DIGEST: ${{ inputs.image_digest }}
+          WEB_ONLY: ${{ inputs.web_only }}
+          MIGRATION_HASH: ${{ steps.migrations.outputs.manifest }}
         run: |
           set -euo pipefail
           runtime_file="$RUNNER_TEMP/shoutrrr-runtime.yaml"
@@ -208,6 +278,8 @@ jobs:
             echo 'INERTIA_SSR_ENABLED: "false"'
             echo 'QUEUE_WORKER_ENABLED: "false"'
             echo 'SCHEDULER_ENABLED: "false"'
+            printf 'WEB_ONLY_RELEASE: "%s"\n' "$WEB_ONLY"
+            printf 'WEB_RELEASE_MIGRATION_HASH: "%s"\n' "$MIGRATION_HASH"
             echo 'DB_CONNECTION: "pgsql"'
             printf 'DB_HOST: "%s"\n' "$DB_HOST"
             echo 'DB_PORT: "5432"'
@@ -278,11 +350,14 @@ jobs:
             THREADS_CLIENT_SECRET shoutrrr-threads-client-secret "$THREADS_CLIENT_SECRET_VERSION"
 
           (IFS=,; echo "${secrets[*]}") > "$secrets_file"
-          echo "runtime_file=$runtime_file" >> "$GITHUB_OUTPUT"
-          echo "secrets_file=$secrets_file" >> "$GITHUB_OUTPUT"
-          echo "image=$GAR_IMAGE@$DIGEST" >> "$GITHUB_OUTPUT"
+          {
+            echo "runtime_file=$runtime_file"
+            echo "secrets_file=$secrets_file"
+            echo "image=$GAR_IMAGE@$DIGEST"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Update and execute migration Job
+        if: ${{ !inputs.web_only }}
         shell: bash
         env:
           IMAGE: ${{ steps.config.outputs.image }}
@@ -305,6 +380,7 @@ jobs:
             --wait
 
       - name: Reject bundled development users in production
+        if: ${{ !inputs.web_only }}
         shell: bash
         run: |
           set -euo pipefail
@@ -315,6 +391,7 @@ jobs:
             --wait
 
       - name: Update terminating background Jobs
+        if: ${{ !inputs.web_only }}
         shell: bash
         env:
           IMAGE: ${{ steps.config.outputs.image }}
@@ -341,12 +418,19 @@ jobs:
           IMAGE: ${{ steps.config.outputs.image }}
           RUNTIME_FILE: ${{ steps.config.outputs.runtime_file }}
           SECRETS_FILE: ${{ steps.config.outputs.secrets_file }}
+          PREVIOUS_REVISION: ${{ steps.baseline.outputs.previous }}
+          WEB_ONLY: ${{ inputs.web_only }}
         run: |
           set -euo pipefail
-          previous="$(gcloud run services describe shoutrrr \
+          gcloud run services describe shoutrrr \
             --project "$PROJECT_ID" --region "$REGION" \
-            --format='value(status.latestReadyRevisionName)')"
-          test -n "$previous"
+            --format='json(status.traffic,spec.template.spec.containers[].name,spec.template.spec.containers[].command,spec.template.spec.containers[].args)' \
+            > "$RUNNER_TEMP/web-before.json"
+          previous="$(jq -er -f .github/serving-revision.jq "$RUNNER_TEMP/web-before.json")"
+          test "$previous" = "$PREVIOUS_REVISION"
+          if [[ "$WEB_ONLY" = "true" ]]; then
+            jq -e -f .github/web-startup.jq "$RUNNER_TEMP/web-before.json"
+          fi
           secrets="$(<"$SECRETS_FILE")"
           suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           revision="shoutrrr-$suffix"
@@ -360,14 +444,11 @@ jobs:
             --set-secrets "$secrets" \
             --revision-suffix "$suffix" \
             --no-traffic \
+            --deploy-health-check \
             --quiet
 
-          gcloud run services update-traffic shoutrrr \
-            --project "$PROJECT_ID" --region "$REGION" \
-            --to-revisions "$previous=100" --quiet
-
           ready_status=""
-          for readiness_attempt in {1..36}; do
+          for ((attempt=0; attempt<36; attempt++)); do
             ready_status="$(
               gcloud run revisions describe "$revision" \
                 --project "$PROJECT_ID" --region "$REGION" --format=json 2>/dev/null |
@@ -386,17 +467,21 @@ jobs:
             exit 1
           fi
 
-          echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
 
       - name: Promote web traffic
+        id: promotion
         if: inputs.promote_web_traffic
         shell: bash
         env:
           REVISION: ${{ steps.web.outputs.revision }}
-          PREVIOUS_REVISION: ${{ steps.web.outputs.previous }}
+          PREVIOUS_REVISION: ${{ steps.baseline.outputs.previous }}
         run: |
           set -euo pipefail
+          previous="$(gcloud run services describe shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" --format='json(status.traffic)' |
+            jq -er -f .github/serving-revision.jq)"
+          test "$previous" = "$PREVIOUS_REVISION"
           restore_previous() {
             if [[ -n "$PREVIOUS_REVISION" ]]; then
               gcloud run services update-traffic shoutrrr \
@@ -418,13 +503,23 @@ jobs:
           DIGEST: ${{ inputs.image_digest }}
           REVISION: ${{ steps.web.outputs.revision }}
           PROMOTED: ${{ inputs.promote_web_traffic }}
+          PROMOTION_RESULT: ${{ steps.promotion.outcome }}
+          WEB_ONLY: ${{ inputs.web_only }}
+          PREVIOUS_REVISION: ${{ steps.baseline.outputs.previous }}
+          PREVIOUS_IMAGE: ${{ steps.baseline.outputs.image }}
+          MIGRATION_HASH: ${{ steps.migrations.outputs.manifest }}
         run: |
           mkdir -p "$RUNNER_TEMP/deploy-evidence"
           {
             echo "version=$VERSION"
             echo "digest=$DIGEST"
             echo "revision=$REVISION"
-            echo "promoted=$PROMOTED"
+            echo "promotion_requested=$PROMOTED"
+            echo "promotion_result=$PROMOTION_RESULT"
+            echo "web_only=$WEB_ONLY"
+            echo "previous_revision=$PREVIOUS_REVISION"
+            echo "previous_image=$PREVIOUS_IMAGE"
+            echo "migration_manifest=$MIGRATION_HASH"
             echo "commit=$GITHUB_SHA"
           } > "$RUNNER_TEMP/deploy-evidence/deployment.txt"
 
