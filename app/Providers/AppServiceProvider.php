@@ -210,11 +210,11 @@ class AppServiceProvider extends ServiceProvider
     protected function configureErrorPages(): void
     {
         Inertia::handleExceptionsUsing(function (ExceptionResponse $response): ?ExceptionResponse {
-            if ($response->exception instanceof RedisException) {
-                return null;
-            }
-
-            if ($response->request->is('api/*') || $response->request->expectsJson()) {
+            if (
+                $response->exception instanceof RedisException
+                || $response->request->is('api/*')
+                || $response->request->expectsJson()
+            ) {
                 return null;
             }
 

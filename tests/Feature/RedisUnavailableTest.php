@@ -5,6 +5,9 @@ use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Route;
 
+const REDIS_OUTAGE_TEST_PATH = '/__redis-outage';
+const REDIS_OUTAGE_MESSAGE = 'Service temporarily unavailable. Please try again later.';
+
 test('Redis outages bypass shared error data and hide internal details', function (string $path, array $headers, bool $json) {
     config(['app.debug' => true]);
 
@@ -21,15 +24,15 @@ test('Redis outages bypass shared error data and hide internal details', functio
     expect($response->headers->hasCacheControlDirective('no-store'))->toBeTrue();
 
     if ($json) {
-        $response->assertExactJson(['message' => 'Service temporarily unavailable. Please try again later.']);
+        $response->assertExactJson(['message' => REDIS_OUTAGE_MESSAGE]);
     } else {
         $response->assertHeader('Content-Type', 'text/plain; charset=UTF-8')
-            ->assertContent('Service temporarily unavailable. Please try again later.');
+            ->assertContent(REDIS_OUTAGE_MESSAGE);
     }
 })->with([
-    'browser' => ['/__redis-outage', ['Accept' => 'text/html'], false],
-    'inertia' => ['/__redis-outage', ['Accept' => 'text/html', 'X-Inertia' => 'true'], false],
-    'JSON' => ['/__redis-outage', ['Accept' => 'application/json'], true],
+    'browser' => [REDIS_OUTAGE_TEST_PATH, ['Accept' => 'text/html'], false],
+    'inertia' => [REDIS_OUTAGE_TEST_PATH, ['Accept' => 'text/html', 'X-Inertia' => 'true'], false],
+    'JSON' => [REDIS_OUTAGE_TEST_PATH, ['Accept' => 'application/json'], true],
     'API without Accept' => ['/api/__redis-outage', [], true],
 ]);
 
@@ -63,12 +66,13 @@ test('a Redis outage while rendering a missing page does not retry shared cache 
 
     $this->get('/__missing-during-redis-outage')
         ->assertServiceUnavailable()
-        ->assertContent('Service temporarily unavailable. Please try again later.');
+        ->assertContent(REDIS_OUTAGE_MESSAGE);
 });
 
 test('requests recover after a transient Redis outage in the same application', function () {
     $unavailable = true;
-    Route::get('/__redis-recovery', function () use (&$unavailable) {
+    $path = '/__redis-recovery';
+    Route::get($path, function () use (&$unavailable) {
         if ($unavailable) {
             throw new RedisException('transient failure');
         }
@@ -76,9 +80,9 @@ test('requests recover after a transient Redis outage in the same application', 
         return response('recovered');
     });
 
-    $this->get('/__redis-recovery')->assertServiceUnavailable();
+    $this->get($path)->assertServiceUnavailable();
     $unavailable = false;
-    $this->get('/__redis-recovery')->assertOk()->assertContent('recovered');
+    $this->get($path)->assertOk()->assertContent('recovered');
 });
 
 test('Redis exceptions remain reportable outside HTTP rendering', function () {

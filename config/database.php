@@ -11,6 +11,22 @@ $redisTlsContext = [
     ], static fn (mixed $value): bool => $value !== null && $value !== ''),
 ];
 
+$redisConnection = [
+    'scheme' => env('REDIS_SCHEME', 'tcp'),
+    'url' => env('REDIS_URL'),
+    'host' => env('REDIS_HOST', '127.0.0.1'),
+    'username' => env('REDIS_USERNAME'),
+    'password' => env('REDIS_PASSWORD'),
+    'port' => env('REDIS_PORT', '6379'),
+    'timeout' => (float) env('REDIS_TIMEOUT', 1),
+    'read_timeout' => (float) env('REDIS_READ_TIMEOUT', 1),
+    'max_retries' => env('REDIS_MAX_RETRIES', 3),
+    'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
+    'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
+    'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+    'context' => $redisTlsContext,
+];
+
 return [
 
     /*
@@ -162,37 +178,13 @@ return [
         ],
 
         'default' => [
-            'scheme' => env('REDIS_SCHEME', 'tcp'),
-            'url' => env('REDIS_URL'),
-            'host' => env('REDIS_HOST', '127.0.0.1'),
-            'username' => env('REDIS_USERNAME'),
-            'password' => env('REDIS_PASSWORD'),
-            'port' => env('REDIS_PORT', '6379'),
+            ...$redisConnection,
             'database' => env('REDIS_DB', '0'),
-            'timeout' => (float) env('REDIS_TIMEOUT', 1),
-            'read_timeout' => (float) env('REDIS_READ_TIMEOUT', 1),
-            'max_retries' => env('REDIS_MAX_RETRIES', 3),
-            'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
-            'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
-            'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
-            'context' => $redisTlsContext,
         ],
 
         'cache' => [
-            'scheme' => env('REDIS_SCHEME', 'tcp'),
-            'url' => env('REDIS_URL'),
-            'host' => env('REDIS_HOST', '127.0.0.1'),
-            'username' => env('REDIS_USERNAME'),
-            'password' => env('REDIS_PASSWORD'),
-            'port' => env('REDIS_PORT', '6379'),
+            ...$redisConnection,
             'database' => env('REDIS_CACHE_DB', '1'),
-            'timeout' => (float) env('REDIS_TIMEOUT', 1),
-            'read_timeout' => (float) env('REDIS_READ_TIMEOUT', 1),
-            'max_retries' => env('REDIS_MAX_RETRIES', 3),
-            'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
-            'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
-            'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
-            'context' => $redisTlsContext,
         ],
 
     ],
