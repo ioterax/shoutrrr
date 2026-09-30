@@ -192,11 +192,17 @@ jobs:
       - name: Capture the serving revision and immutable image
         id: baseline
         shell: bash
+        env:
+          WEB_ONLY: ${{ inputs.web_only }}
         run: |
           set -euo pipefail
           gcloud run services describe shoutrrr \
             --project "$PROJECT_ID" --region "$REGION" \
-            --format='json(status.traffic)' > "$RUNNER_TEMP/deploy-evidence/traffic-before.json"
+            --format='json(status.traffic,spec.template.spec.containers[].name,spec.template.spec.containers[].command,spec.template.spec.containers[].args)' \
+            > "$RUNNER_TEMP/deploy-evidence/traffic-before.json"
+          if [[ "$WEB_ONLY" = "true" ]]; then
+            jq -e -f .github/web-startup.jq "$RUNNER_TEMP/deploy-evidence/traffic-before.json"
+          fi
           previous="$(jq -er -f .github/serving-revision.jq "$RUNNER_TEMP/deploy-evidence/traffic-before.json")"
           image="$(gcloud run revisions describe "$previous" \
             --project "$PROJECT_ID" --region "$REGION" --format='value(status.imageDigest)')"
@@ -222,6 +228,8 @@ jobs:
           docker pull "$candidate"
           test "$(docker image inspect "$candidate" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
           test "$(docker image inspect "$candidate" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')" = "$VERSION"
+          docker image inspect "$candidate" --format '{{json .Config}}' |
+            jq -e '.Cmd == ["/usr/local/bin/app-command.sh"] and .Entrypoint == ["docker-php-entrypoint"]'
 
           extract_manifest() {
             docker run --rm --network none --entrypoint php \
@@ -411,12 +419,18 @@ jobs:
           RUNTIME_FILE: ${{ steps.config.outputs.runtime_file }}
           SECRETS_FILE: ${{ steps.config.outputs.secrets_file }}
           PREVIOUS_REVISION: ${{ steps.baseline.outputs.previous }}
+          WEB_ONLY: ${{ inputs.web_only }}
         run: |
           set -euo pipefail
-          previous="$(gcloud run services describe shoutrrr \
-            --project "$PROJECT_ID" --region "$REGION" --format='json(status.traffic)' |
-            jq -er -f .github/serving-revision.jq)"
+          gcloud run services describe shoutrrr \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format='json(status.traffic,spec.template.spec.containers[].name,spec.template.spec.containers[].command,spec.template.spec.containers[].args)' \
+            > "$RUNNER_TEMP/web-before.json"
+          previous="$(jq -er -f .github/serving-revision.jq "$RUNNER_TEMP/web-before.json")"
           test "$previous" = "$PREVIOUS_REVISION"
+          if [[ "$WEB_ONLY" = "true" ]]; then
+            jq -e -f .github/web-startup.jq "$RUNNER_TEMP/web-before.json"
+          fi
           secrets="$(<"$SECRETS_FILE")"
           suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           revision="shoutrrr-$suffix"

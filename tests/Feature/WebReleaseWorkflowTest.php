@@ -84,3 +84,18 @@ SH);
     'invalid mode' => ['invalid', 'manifest', 0, false],
     'ordinary release' => ['false', '', 1, true],
 ]);
+
+it('rejects Cloud Run overrides that could bypass the startup gates', function (array $containers, bool $accepted): void {
+    $process = new Process(['jq', '-e', '-f', base_path('.github/web-startup.jq')]);
+    $process->setInput(json_encode(['spec' => ['template' => ['spec' => ['containers' => $containers]]]], JSON_THROW_ON_ERROR));
+    $process->run();
+
+    expect($process->isSuccessful())->toBe($accepted);
+})->with([
+    'image defaults' => [[['name' => 'shoutrrr']], true],
+    'empty overrides' => [[['command' => [], 'args' => []]], true],
+    'alternate command' => [[['command' => ['php', 'artisan', 'octane:start']]], false],
+    'alternate args' => [[['args' => ['php', 'artisan', 'octane:start']]], false],
+    'multiple containers' => [[['name' => 'shoutrrr'], ['name' => 'sidecar']], false],
+    'no containers' => [[], false],
+]);
