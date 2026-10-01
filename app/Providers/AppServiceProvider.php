@@ -29,6 +29,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
+use Illuminate\View\Compilers\BladeCompiler;
 use Inertia\ExceptionResponse;
 use Inertia\Inertia;
 use Laravel\Cashier\Cashier;
@@ -59,6 +60,10 @@ class AppServiceProvider extends ServiceProvider
 
         $this->callAfterResolving('redis', function (RedisManager $redis): void {
             $redis->extend('phpredis', fn (): PhpRedisConnector => new PhpRedisConnector);
+        });
+
+        $this->callAfterResolving('blade.compiler', function (BladeCompiler $blade): void {
+            $blade->componentNamespace('Inertia\\View\\Components', 'inertia');
         });
     }
 

@@ -213,6 +213,18 @@ jobs:
             test ! -e /usr/local/bin/gosu
           '
 
+      - name: Verify production optimization in the final runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint php \
+            -e APP_ENV=production -e APP_DEBUG=false -e SELF_HOSTED=true \
+            -e CACHE_STORE=array -e SESSION_DRIVER=array -e QUEUE_CONNECTION=sync \
+            -e LOG_CHANNEL=stderr -e DB_CONNECTION=pgsql \
+            -e INERTIA_SSR_ENABLED=false -e PASSPORT_AUTO_GENERATE_KEYS=false \
+            "$CI_IMAGE" artisan optimize --no-ansi --no-interaction
+
       # The extractor is also mounted into historical images, so it cannot rely
       # on a new Artisan command being present in the served baseline.
       - name: Verify migration manifest extraction in the final runtime
